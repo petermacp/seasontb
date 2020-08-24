@@ -1,0 +1,2458 @@
+---
+title: "Seasonality of tuberculosis in Blantyre, Malawi"
+
+subtitle: "Analysis"
+
+author: |
+  | Peter MacPherson
+  |
+  | Liverpool School of Tropical Medicine, Liverpool, UK
+  | Malawi-Liverpool-Wellcome Clinical Research Programme, Blantyre, Malawi
+  |
+
+date: | 
+  | `r format(Sys.time(), "%B %d, %Y")`
+  |
+  | Table of Contents:
+output: 
+  html_document:
+    theme: cosmo
+    highlight: espresso
+    toc: true
+---
+
+<br>
+
+## 1. Backgound
+
+The script conducts analysis of the seasonality of TB in Blantyre, Malawi
+
+<br>
+
+## 2. Set-up
+
+Load all required packages for analysis.
+
+```{r setup, echo=TRUE, include=TRUE, message=FALSE, comment=NA, warning=FALSE}
+library(tidyverse)      #for data manipulation
+library(lubridate)
+library(tsibble)
+library(glue)
+library(mgcv)
+library(mlwdata)
+library(zoo)
+library(ggpubr)
+library(xts)
+library(smooth)
+library(Mcomp)
+library(fpp2)
+library(smooth)
+library(ggseas)
+library(here)
+library(ggtext)
+library(GSODR)
+library(arsenal)
+library(patchwork)
+library(dlnm)
+library(MuMIn)
+library(Metrics)
+library(knitr)
+#for Blantyre data (
+# install.packages("devtools")
+#devtools::install_github("petermacp/mlwdata"))
+
+```
+
+<br>
+
+## 3. Import the data
+
+Load the required data.
+
+```{r, message=FALSE, comment=NA, warning=FALSE}
+tbcases <- mlwdata::tb_cases_2011_2018
+blantyre <- mlwdata::blantyre_census_by_q
+
+#Weather data
+load(system.file("extdata", "isd_history.rda", package = "GSODR"))
+#see the available data for Malawi
+Malawi <- subset(isd_history, COUNTRY_NAME == "MALAWI")
+#Subset the Malawi data for Chileka Airport station
+chileka <- Malawi %>%
+  filter(NAME=="CHILEKA INTL")
+#Now pull the 2017 data for Malawi
+mweather <- get_GSOD(years = c(2011:2019), station = "676930-99999")
+
+```
+
+
+<br>
+
+## 4. Cleaning and recoding
+
+```{r, message=FALSE, comment=NA, warning=FALSE}
+#Here we aggregate the rural and urban populations, and sum across age groups to get overall population at each quarter.
+
+#Then we do linear interpolation to get the weekly estimated population.
+
+a <- blantyre %>%
+  filter(sex == "total") %>%
+  filter(year_q>="2011.2") %>%
+  group_by(year_q) %>%
+  summarise(population = sum(population)) %>%
+  mutate(year_temp = str_extract(year_q, "[^.]+")) %>%
+  mutate(period_temp = case_when(str_detect(year_q, ".1$") ~ "03-31",
+                                 str_detect(year_q, ".2$") ~ "06-30",
+                                 str_detect(year_q, ".3$") ~ "09-30",
+                                 str_detect(year_q, ".4$") ~ "12-31")) %>%
+  mutate(temp_date = ymd(glue("{year_temp}-{period_temp}"))) %>%
+  mutate(y_w = yearweek(temp_date))
+
+
+weeks_for_fill <- seq(from=min(a$y_w), to=max(a$y_w), 1) %>%
+  tibble(y_w=.)
+
+a <- full_join(a, weeks_for_fill)
+
+a <- a %>%
+  ungroup() %>%
+  mutate(y_w = yearweek(y_w)) %>%
+  arrange(y_w) %>%
+  mutate(int_pop = round(zoo::na.approx(population))) %>%
+  dplyr::select(year_q, y_w, int_pop) %>%
+  fill(year_q)
+
+#Tidy-up the TB case data
+
+b <- tbcases %>%
+  select(reg_date, year_q, year) %>%
+  filter(year_q >="2011.3") %>%
+  mutate(y_w = yearweek(reg_date))
+
+b <- b %>%
+  group_by(y_w) %>%
+  count() %>%
+  ungroup()
+
+b %>% summarise(sum = sum(n))
+
+
+
+```
+
+<br>
+
+## 5. Table 1: Characteristics of cases
+
+```{r, results="asis"}
+
+tab1 <- tbcases %>%
+  filter(year_q >="2011.3") %>%
+  mutate(year2 = factor(lubridate::year(reg_date))) %>%
+  mutate(agegp = factor(agegp)) %>%
+  mutate(month = month(reg_date)) %>%
+  mutate(season = case_when(month >=5 & month<=8 ~ "Cold, dry (May-Aug)",
+                            month >8 & month <=11 ~ "Hot, dry (Sept-Nov)",
+                            month==12 ~ "Hot, wet (Dec-Apr)",
+                            month<=4 ~ "Hot, wet (Dec-Apr)"))
+
+
+
+table1 <- tableby(year2 ~ season +sex + age + hiv + art + tbtype + tbcat + smr_xpert_any, 
+                  data=tab1, digits=1L, numeric.stats="meansd")
+
+summary(table1)
+
+```
+
+
+<br>
+
+## 6. TB Case notification rates
+
+Calculate and summarise TB case notification rates
+
+```{r, message=FALSE, comment=NA, warning=FALSE}
+
+#bind cases to week
+
+c <- left_join(a, b, by="y_w")
+
+c <- c %>%
+  mutate(pop_52 = ceiling(int_pop/52.25)) %>%
+  mutate(i = (n/pop_52)*100000) %>%
+  rowwise %>%
+  mutate(xx = list(broom::tidy(binom.test(n, pop_52, conf.level=0.95)))) %>%
+  tidyr::unnest(xx) %>%
+  ungroup() %>%
+  mutate_at(vars(estimate, conf.low, conf.high), funs(.*100000)) %>%
+  select(-estimate, -statistic, - p.value, -method, -alternative, -parameter)
+
+#Drop the first and last observations - these look odd
+
+d <- c %>%
+  filter(y_w !=ymd("2011-06-27")) %>%
+  filter(y_w !=ymd("2018-12-31"))
+
+d <- d %>%
+  arrange(y_w) %>%
+  mutate(w2 = row_number())
+
+#plot case notification rate
+
+CNR <- d %>%
+  ggplot() +
+  geom_ribbon(aes(x=y_w, ymin=conf.low, ymax=conf.high), alpha=0.3) +
+  geom_line(aes(x=y_w, y=i)) +
+  labs(title = "TB case notification rate",
+       subtitle = "Blantyre, Malawi: per week",
+       y="CNR per 100,000/year",
+       x="Week") +
+  theme(panel.border = element_rect(colour = "black", fill=NA, size=0.5))  +
+  theme(axis.text = element_text(family = "Menlo", size=8))+ 
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))+ 
+  theme(title = element_text(family = "Oswald", size=11)) +
+  theme(axis.title = element_text(family = "Oswald", size = 11, hjust = 1))
+
+CNR
+
+
+```
+
+<br>
+
+TB case notification rates wtih moving averages
+
+```{r, message=FALSE, comment=NA, warning=FALSE}
+
+#calculate moving average with different extents of smoothing
+
+CNRma <- d %>%
+  select(y_w, srate = i) %>%
+  mutate(srate_ma5 = rollmean(srate, k = 5, fill = NA),
+         srate_ma10 = rollmean(srate, k = 10, fill = NA),
+         srate_ma25 = rollmean(srate, k = 25, fill = NA),
+         srate_ma50 = rollmean(srate, k = 50, fill = NA),
+         srate_ma100 = rollmean(srate, k = 100, fill = NA))
+
+#plot 10 week moving average
+
+CNR10wma <- CNRma %>%
+  gather(metric, value, srate_ma10) %>%
+  ggplot() +
+  geom_line(data = d, aes(x=as_date(y_w), y=i), alpha=0.2) +
+  geom_line(aes(x= as_date(y_w), value)) +
+  labs(title = "Overall TB case notification rate",
+       subtitle = "Weekly & 10-week average",
+       y="CNR per 100,000/year",
+       x="")+
+  ylim(0,300) +
+  theme(panel.border = element_rect(colour = "black", fill=NA, size=0.5)) +
+  scale_x_date(date_breaks = "20 weeks",
+               date_labels = "%Y-w%W")  +
+  theme(panel.border = element_rect(colour = "black", fill=NA, size=0.5))  +
+  theme(axis.text = element_text(family = "Menlo", size=8))+ 
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))+ 
+  theme(title = element_text(family = "Oswald", size=11)) +
+  theme(axis.title = element_text(family = "Oswald", size = 11))
+
+CNR10wma
+
+# make figure of CNR and moving average
+
+ggarrange(CNR, CNR10wma,
+          labels = c("A", "B"),
+          ncol = 1, nrow = 2)
+
+
+```
+
+<br>
+
+## 7. TB case notification rates stratified by age, sex, HIV status
+
+First by sex
+
+```{r, message=FALSE, comment=NA, warning=FALSE}
+
+##filter sex
+
+bmale <- filter(tbcases, sex == "Male") %>%
+  select(reg_date, year_q, year) %>%
+  filter(year_q >="2011.3") %>%
+  mutate(y_w = yearweek(reg_date))
+
+bmale <- bmale %>%
+  group_by(y_w) %>%
+  count() %>%
+  ungroup()
+
+bmale %>% summarise(sum = sum(n))
+
+cmale <- left_join(a, bmale, by="y_w")
+
+cmale <- cmale %>%
+  mutate(pop_52 = ceiling(int_pop/52.25)) %>%
+  mutate(i = (n/pop_52)*100000) %>%
+  rowwise %>%
+  mutate(xx = list(broom::tidy(binom.test(n, pop_52, conf.level=0.95)))) %>%
+  tidyr::unnest(xx) %>%
+  ungroup() %>%
+  mutate_at(vars(estimate, conf.low, conf.high), funs(.*100000)) %>%
+  select(-estimate, -statistic, - p.value, -method, -alternative, -parameter)
+
+dmale <- cmale %>%
+  filter(y_w !=ymd("2011-06-27")) %>%
+  filter(y_w !=ymd("2018-12-31"))
+
+dmale <- dmale %>%
+  arrange(y_w) %>%
+  mutate(w2 = row_number())
+
+dmalemovingaverage <- dmale %>%
+  select(y_w, sratemale = i) %>%
+  mutate(srate_ma5male = rollmean(sratemale, k = 5, fill = NA),
+         srate_ma10male = rollmean(sratemale, k = 10, fill = NA),
+         srate_ma25male = rollmean(sratemale, k = 25, fill = NA),
+         srate_ma50male = rollmean(sratemale, k = 50, fill = NA),
+         srate_ma100male = rollmean(sratemale, k = 100, fill = NA))
+
+bfemale <- filter(tbcases, sex == "Female") %>%
+  select(reg_date, year_q, year) %>%
+  filter(year_q >="2011.3") %>%
+  mutate(y_w = yearweek(reg_date))
+
+bfemale <- bfemale %>%
+  group_by(y_w) %>%
+  count() %>%
+  ungroup()
+
+bfemale %>% summarise(sum = sum(n))
+
+cfemale <- left_join(a, bfemale, by="y_w")
+
+cfemale <- cfemale %>%
+  mutate(pop_52 = ceiling(int_pop/52.25)) %>%
+  mutate(i = (n/pop_52)*100000) %>%
+  rowwise %>%
+  mutate(xx = list(broom::tidy(binom.test(n, pop_52, conf.level=0.95)))) %>%
+  tidyr::unnest(xx) %>%
+  ungroup() %>%
+  mutate_at(vars(estimate, conf.low, conf.high), funs(.*100000)) %>%
+  select(-estimate, -statistic, - p.value, -method, -alternative, -parameter)
+
+dfemale <- cfemale %>%
+  filter(y_w !=ymd("2011-06-27")) %>%
+  filter(y_w !=ymd("2018-12-31"))
+
+dfemale <- dfemale %>%
+  arrange(y_w) %>%
+  mutate(w2 = row_number())
+
+dfemalemovingaverage <- dfemale %>%
+  select(y_w, sratefemale = i) %>%
+  mutate(srate_ma5female = rollmean(sratefemale, k = 5, fill = NA),
+         srate_ma10female = rollmean(sratefemale, k = 10, fill = NA),
+         srate_ma25female = rollmean(sratefemale, k = 25, fill = NA),
+         srate_ma50female = rollmean(sratefemale, k = 50, fill = NA),
+         srate_ma100female = rollmean(sratefemale, k = 100, fill = NA))
+
+mergesex <- merge(dmalemovingaverage,dfemalemovingaverage, by="y_w")
+
+graphbysex <- mergesex %>%
+  ggplot() +
+  geom_line(aes(x=as_date(y_w), y=sratemale), alpha=0.2) +
+  geom_line(aes(x=as_date(y_w), y=sratefemale), alpha=0.2) +
+  geom_line(aes(x=as_date(y_w), y=srate_ma10male), colour="#0d3b66") +
+  geom_line(aes(x=as_date(y_w), y=srate_ma10female), colour="#ee964b") +
+  labs(title = "TB case notification rates",
+       subtitle = "Per week & 10-week averages (<b style='color:#0d3b66'>Male</b>, <b style='color:#ee964b'>Female</b>)",
+       y="CNR per 100,000/year",
+       x="")  +
+  theme(panel.border = element_rect(colour = "black", fill=NA, size=0.5)) +
+  theme(plot.subtitle = element_markdown(lineheight = 1)) +
+  scale_x_date(date_breaks = "20 weeks",
+               date_labels = "%Y-w%W")   +
+  theme(panel.border = element_rect(colour = "black", fill=NA, size=0.5))  +
+  theme(axis.text = element_text(family = "Menlo", size=8))+ 
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))+ 
+  theme(title = element_text(family = "Oswald", size=11)) +
+  theme(axis.title = element_text(family = "Oswald", size = 11))
+
+
+graphbysex
+
+
+
+```
+
+<br>
+
+Now by HIV status
+
+```{r, message=FALSE, comment=NA, warning=FALSE}
+
+bHIVpos <- filter(tbcases, hiv == "b) HIV-positive") %>%
+  select(reg_date, year_q, year) %>%
+  filter(year_q >="2011.3") %>%
+  mutate(y_w = yearweek(reg_date))
+
+bHIVpos <- bHIVpos %>%
+  group_by(y_w) %>%
+  count() %>%
+  ungroup()
+
+bHIVpos %>% summarise(sum = sum(n))
+
+cHIVpos <- left_join(a, bHIVpos, by="y_w")
+
+cHIVpos <- cHIVpos %>%
+  mutate(pop_52 = ceiling(int_pop/52.25)) %>%
+  mutate(i = (n/pop_52)*100000) %>%
+  rowwise %>%
+  mutate(xx = list(broom::tidy(binom.test(n, pop_52, conf.level=0.95)))) %>%
+  tidyr::unnest(xx) %>%
+  ungroup() %>%
+  mutate_at(vars(estimate, conf.low, conf.high), funs(.*100000)) %>%
+  select(-estimate, -statistic, - p.value, -method, -alternative, -parameter)
+
+dHIVpos <- cHIVpos %>%
+  filter(y_w !=ymd("2011-06-27")) %>%
+  filter(y_w !=ymd("2018-12-31"))
+
+dHIVpos <- dHIVpos %>%
+  arrange(y_w) %>%
+  mutate(w2 = row_number())
+
+dHIVposmovingaverage <- dHIVpos %>%
+  select(y_w, srateHIVpos = i) %>%
+  mutate(srate_ma5HIVpos = rollmean(srateHIVpos, k = 5, fill = NA),
+         srate_ma10HIVpos = rollmean(srateHIVpos, k = 10, fill = NA),
+         srate_ma25HIVpos = rollmean(srateHIVpos, k = 25, fill = NA),
+         srate_ma50HIVpos = rollmean(srateHIVpos, k = 50, fill = NA),
+         srate_ma100HIVpos = rollmean(srateHIVpos, k = 100, fill = NA))
+
+bHIVneg <- filter(tbcases, hiv == "a) HIV-negative") %>%
+  select(reg_date, year_q, year) %>%
+  filter(year_q >="2011.3") %>%
+  mutate(y_w = yearweek(reg_date))
+
+bHIVneg <- bHIVneg %>%
+  group_by(y_w) %>%
+  count() %>%
+  ungroup()
+
+bHIVneg %>% summarise(sum = sum(n))
+
+cHIVneg <- left_join(a, bHIVneg, by="y_w")
+
+cHIVneg <- cHIVneg %>%
+  mutate(pop_52 = ceiling(int_pop/52.25)) %>%
+  mutate(i = (n/pop_52)*100000) %>%
+  rowwise %>%
+  mutate(xx = list(broom::tidy(binom.test(n, pop_52, conf.level=0.95)))) %>%
+  tidyr::unnest(xx) %>%
+  ungroup() %>%
+  mutate_at(vars(estimate, conf.low, conf.high), funs(.*100000)) %>%
+  select(-estimate, -statistic, - p.value, -method, -alternative, -parameter)
+
+dHIVneg <- cHIVneg %>%
+  filter(y_w !=ymd("2011-06-27")) %>%
+  filter(y_w !=ymd("2018-12-31"))
+
+dHIVneg <- dHIVneg %>%
+  arrange(y_w) %>%
+  mutate(w2 = row_number())
+
+dHIVnegmovingaverage <- dHIVneg %>%
+  select(y_w, srateHIVneg = i) %>%
+  mutate(srate_ma5HIVneg = rollmean(srateHIVneg, k = 5, fill = NA),
+         srate_ma10HIVneg = rollmean(srateHIVneg, k = 10, fill = NA),
+         srate_ma25HIVneg = rollmean(srateHIVneg, k = 25, fill = NA),
+         srate_ma50HIVneg = rollmean(srateHIVneg, k = 50, fill = NA),
+         srate_ma100HIVneg = rollmean(srateHIVneg, k = 100, fill = NA))
+
+mergeHIV <- merge(dHIVposmovingaverage,dHIVnegmovingaverage, by="y_w")
+
+graphbyHIV <- mergeHIV %>%
+  ggplot() +
+  geom_line(aes(x=as_date(y_w), y=srateHIVneg), alpha=0.2) +
+  geom_line(aes(x=as_date(y_w), y=srateHIVpos), alpha=0.2) +
+  geom_line(aes(x=as_date(y_w), y=srate_ma10HIVneg), colour="#247ba0") +
+  geom_line(aes(x=as_date(y_w), y=srate_ma10HIVpos), colour="#f25f5c") +
+  labs(title = "TB case notification rates",
+       subtitle = "Per week & 10-week averages (<b style='color:#f25f5c'>HIV-positive</b>, <b style='color:#247ba0'>HIV-negative</b>)",
+       y="CNR per 100,000/year",
+       x="")  +
+  theme(panel.border = element_rect(colour = "black", fill=NA, size=0.5))+
+  theme(
+    plot.subtitle = element_markdown(lineheight = 1)) +
+  scale_x_date(date_breaks = "20 weeks",
+               date_labels = "%Y-w%W")  +
+  theme(panel.border = element_rect(colour = "black", fill=NA, size=0.5))  +
+  theme(axis.text = element_text(family = "Menlo", size=8))+ 
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))+ 
+  theme(title = element_text(family = "Oswald", size=11)) +
+  theme(axis.title = element_text(family = "Oswald", size = 11))
+
+
+
+graphbyHIV
+
+
+```
+
+<br>
+
+Now by age group
+
+```{r, message=FALSE, comment=NA, warning=FALSE}
+
+
+bunder20 <- filter(tbcases, age < 20) %>%
+  select(reg_date, year_q, year) %>%
+  filter(year_q >="2011.3") %>%
+  mutate(y_w = yearweek(reg_date))
+
+bunder20 <- bunder20 %>%
+  group_by(y_w) %>%
+  count() %>%
+  ungroup()
+
+bunder20 %>% summarise(sum = sum(n))
+
+cunder20 <- left_join(a, bunder20, by="y_w")
+cunder20[is.na(cunder20)] <- 0
+
+cunder20 <- cunder20 %>%
+  mutate(pop_52 = ceiling(int_pop/52.25)) %>%
+  mutate(i = (n/pop_52)*100000) %>%
+  rowwise %>%
+  mutate(xx = list(broom::tidy(binom.test(n, pop_52, conf.level=0.95)))) %>%
+  tidyr::unnest(xx) %>%
+  ungroup() %>%
+  mutate_at(vars(estimate, conf.low, conf.high), funs(.*100000)) %>%
+  select(-estimate, -statistic, - p.value, -method, -alternative, -parameter)
+
+dunder20 <- cunder20 %>%
+  filter(y_w !=ymd("2011-06-27")) %>%
+  filter(y_w !=ymd("2018-12-31"))
+
+dunder20 <- dunder20 %>%
+  arrange(y_w) %>%
+  mutate(w2 = row_number())
+
+dunder20movingaverage <- dunder20 %>%
+  select(y_w, srateunder20 = i) %>%
+  mutate(srate_ma5under20 = rollmean(srateunder20, k = 5, fill = NA),
+         srate_ma10under20 = rollmean(srateunder20, k = 10, fill = NA),
+         srate_ma25under20 = rollmean(srateunder20, k = 25, fill = NA),
+         srate_ma50under20 = rollmean(srateunder20, k = 50, fill = NA),
+         srate_ma100under20 = rollmean(srateunder20, k = 100, fill = NA))
+
+bbet20_40 <- filter(tbcases, age >= 20 & age <40) %>%
+  select(reg_date, year_q, year) %>%
+  filter(year_q >="2011.3") %>%
+  mutate(y_w = yearweek(reg_date))
+
+bbet20_40 <- bbet20_40 %>%
+  group_by(y_w) %>%
+  count() %>%
+  ungroup()
+
+bbet20_40 %>% summarise(sum = sum(n))
+
+cbet20_40 <- left_join(a, bbet20_40, by="y_w")
+
+cbet20_40 <- cbet20_40 %>%
+  mutate(pop_52 = ceiling(int_pop/52.25)) %>%
+  mutate(i = (n/pop_52)*100000) %>%
+  rowwise %>%
+  mutate(xx = list(broom::tidy(binom.test(n, pop_52, conf.level=0.95)))) %>%
+  tidyr::unnest(xx) %>%
+  ungroup() %>%
+  mutate_at(vars(estimate, conf.low, conf.high), funs(.*100000)) %>%
+  select(-estimate, -statistic, - p.value, -method, -alternative, -parameter)
+
+dbet20_40 <- cbet20_40 %>%
+  filter(y_w !=ymd("2011-06-27")) %>%
+  filter(y_w !=ymd("2018-12-31"))
+
+dbet20_40 <- dbet20_40 %>%
+  arrange(y_w) %>%
+  mutate(w2 = row_number())
+
+dbet20_40movingaverage <- dbet20_40 %>%
+  select(y_w, sratebet20_40 = i) %>%
+  mutate(srate_ma5bet20_40 = rollmean(sratebet20_40, k = 5, fill = NA),
+         srate_ma10bet20_40 = rollmean(sratebet20_40, k = 10, fill = NA),
+         srate_ma25bet20_40 = rollmean(sratebet20_40, k = 25, fill = NA),
+         srate_ma50bet20_40 = rollmean(sratebet20_40, k = 50, fill = NA),
+         srate_ma100bet20_40 = rollmean(sratebet20_40, k = 100, fill = NA))
+
+bover40 <- filter(tbcases, age >= 40) %>%
+  select(reg_date, year_q, year) %>%
+  filter(year_q >="2011.3") %>%
+  mutate(y_w = yearweek(reg_date))
+
+bover40 <- bover40 %>%
+  group_by(y_w) %>%
+  count() %>%
+  ungroup()
+
+bover40 %>% summarise(sum = sum(n))
+
+cover40 <- left_join(a, bover40, by="y_w")
+cover40[is.na(cover40)] <- 0
+
+cover40 <- cover40 %>%
+  mutate(pop_52 = ceiling(int_pop/52.25)) %>%
+  mutate(i = (n/pop_52)*100000) %>%
+  rowwise %>%
+  mutate(xx = list(broom::tidy(binom.test(n, pop_52, conf.level=0.95)))) %>%
+  tidyr::unnest(xx) %>%
+  ungroup() %>%
+  mutate_at(vars(estimate, conf.low, conf.high), funs(.*100000)) %>%
+  select(-estimate, -statistic, - p.value, -method, -alternative, -parameter)
+
+dover40 <- cover40 %>%
+  filter(y_w !=ymd("2011-06-27")) %>%
+  filter(y_w !=ymd("2018-12-31"))
+
+dover40 <- dover40 %>%
+  arrange(y_w) %>%
+  mutate(w2 = row_number())
+
+dover40movingaverage <- dover40 %>%
+  select(y_w, srateover40 = i) %>%
+  mutate(srate_ma5over40 = rollmean(srateover40, k = 5, fill = NA),
+         srate_ma10over40 = rollmean(srateover40, k = 10, fill = NA),
+         srate_ma25over40 = rollmean(srateover40, k = 25, fill = NA),
+         srate_ma50over40 = rollmean(srateover40, k = 50, fill = NA),
+         srate_ma100over40 = rollmean(srateover40, k = 100, fill = NA))
+
+mergeage <- merge(dunder20movingaverage,dbet20_40movingaverage, by="y_w")
+mergeage <- merge(mergeage, dover40movingaverage, by="y_w")
+
+graphbyage <- mergeage %>%
+  ggplot() +
+  geom_line(aes(x=as_date(y_w), y=srateunder20), alpha=0.2) +
+  geom_line(aes(x=as_date(y_w), y=sratebet20_40), alpha=0.2) +
+  geom_line(aes(x=as_date(y_w), y=srateover40), alpha=0.2) +
+  geom_line(aes(x=as_date(y_w), y=srate_ma10under20), colour="#ef476f") +
+  geom_line(aes(x=as_date(y_w), y=srate_ma10bet20_40), colour="#118ab2") +
+  geom_line(aes(x=as_date(y_w), y=srate_ma10over40), colour="#073b4c") +
+  labs(title = "TB case notification rates",
+       subtitle = "Per week & 10-week averages (<b style='color:#ef476f'>0-20</b>, <b style='color:#118ab2'>20-40</b>, <b style='color:#073b4c'>40+ years</b>)",
+       y="CNR per 100,000/year",
+       x="")  +
+  theme(panel.border = element_rect(colour = "black", fill=NA, size=0.5))+
+  theme(
+    plot.subtitle = element_markdown(lineheight = 1)) +
+  scale_x_date(date_breaks = "20 weeks",
+               date_labels = "%Y-w%W")  +
+  theme(panel.border = element_rect(colour = "black", fill=NA, size=0.5))  +
+  theme(axis.text = element_text(family = "Menlo", size=8))+ 
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))+ 
+  theme(title = element_text(family = "Oswald", size=11)) +
+  theme(axis.title = element_text(family = "Oswald", size = 11))
+
+
+
+graphbyage
+
+```
+
+<br>
+
+## 8. Figure 1: Combine graphs together
+
+```{r, message=FALSE, comment=NA, warning=FALSE}
+ggarrange(graphbyage, graphbysex, graphbyHIV,
+          labels = c("A", "B", "C"),
+          ncol = 1, nrow = 3)
+
+ggsave(here("figures/figure1.png"), dpi=600, width=9, height=10)
+
+```
+
+<br>
+
+## 9. Figure 2: weather data
+
+First temperature
+
+```{r, message=FALSE, comment=NA, warning=FALSE}
+
+df2 <-  mweather %>%
+  mutate(reg_date = ymd(YEARMODA)) %>%
+  mutate(dow = wday(reg_date, label=TRUE)) %>%
+  mutate(dom = mday(reg_date)) %>%
+  mutate(doy = yday(reg_date)) %>%
+  mutate(month = month(reg_date, label=TRUE)) %>%
+  mutate(year = year(reg_date))
+
+# arrange by date then remove rows for first 3 months of 2011 where no equivalent data for cases
+
+df2 <- df2[-c(1:79),]
+
+
+# plot daily temperature
+
+ggplot(data = df2) +
+  geom_line(mapping = aes(x = reg_date, y = TEMP))
+
+#calculate moving average temp with different levels of variability
+
+df2movingavetemp <- df2 %>%
+  select(reg_date, sratetemp = TEMP) %>%
+  mutate(srate_ma5temp = rollmean(sratetemp, k = 5, fill = NA),
+         srate_ma10temp = rollmean(sratetemp, k = 10, fill = NA),
+         srate_ma25temp = rollmean(sratetemp, k = 25, fill = NA),
+         srate_ma70temp = rollmean(sratetemp, k = 70, fill = NA),
+         srate_ma100temp = rollmean(sratetemp, k = 100, fill = NA))
+
+
+#plot temp moving average
+
+tempma <- df2movingavetemp %>%
+  filter(reg_date >= ymd("2011-07-02")) %>%
+  filter(reg_date <= ymd("2018-12-31")) %>%
+  gather(metric, value, srate_ma70temp) %>%
+  ggplot(aes(reg_date, value, color = metric)) +
+  geom_line()+
+  labs(title = "Temperature",
+       subtitle = "10-week average",
+       y="Temperature (Celsius)",
+       x="Epidemiological week") +
+  theme(panel.border = element_rect(colour = "black", fill=NA, size=0.5),legend.position = "none") +
+  scale_color_manual(values=c("#264653")) +
+  scale_x_date(date_breaks = "20 weeks",
+               date_labels = "%Y-w%W")  +
+  theme(panel.border = element_rect(colour = "black", fill=NA, size=0.5))  +
+  theme(axis.text = element_text(family = "Menlo", size=8))+ 
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))+ 
+  theme(title = element_text(family = "Oswald", size=11)) +
+  theme(axis.title = element_text(family = "Oswald", size = 11, vjust=-2))
+
+tempma
+
+
+```
+
+Precipitation
+
+```{r, message=FALSE, comment=NA, warning=FALSE}
+
+
+prcpma <- df2 %>%
+  filter(reg_date >= ymd("2011-07-02")) %>%
+  filter(reg_date <= ymd("2018-12-31")) %>%
+  ggplot() +
+  geom_line(mapping = aes(x = reg_date, y = PRCP), colour="#2a9d8f")+
+  labs(title = "Rainfall",
+       subtitle = "Daily rainfall",
+       y="Precipitation (mm)",
+       x="Epidemiological week") +
+  theme(panel.border = element_rect(colour = "black", fill=NA, size=0.5),legend.position = "none")  +
+  scale_x_date(date_breaks = "20 weeks",
+               date_labels = "%Y-w%W") +
+  theme(panel.border = element_rect(colour = "black", fill=NA, size=0.5))  +
+  theme(axis.text = element_text(family = "Menlo", size=8))+ 
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))+ 
+  theme(title = element_text(family = "Oswald", size=11)) +
+  theme(axis.title = element_text(family = "Oswald", size = 11, vjust=-2))
+
+prcpma
+
+#calculate moving average rain with different levels of variability
+
+df2movingavePRCP <- df2 %>%
+  select(reg_date, srateprcp = PRCP) %>%
+  mutate(srate_ma7prcp = rollmean(srateprcp, k = 7, fill = NA),
+         srate_ma10prcp = rollmean(srateprcp, k = 10, fill = NA),
+         srate_ma25prcp = rollmean(srateprcp, k = 25, fill = NA),
+         srate_ma70prcp = rollmean(srateprcp, k = 70, fill = NA),
+         srate_ma100prcp = rollmean(srateprcp, k = 100, fill = NA))
+
+NAprcp <- df2movingavePRCP %>%
+  gather(metric, value, srate_ma7prcp) %>%
+  ggplot(aes(reg_date, value, color = metric)) +
+  geom_line()+
+  labs(title = "Precipitation",
+       y="Precipitation",
+       x="Epidemiological weeks") +
+  theme(panel.border = element_rect(colour = "black", fill=NA, size=0.5),legend.position = "none") +
+  scale_color_manual(values=c("#f4a261"))  +
+  scale_x_date(date_breaks = "20 weeks",
+               date_labels = "%Y-w%W") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))+ 
+  theme(plot.title = element_text(size=12))
+
+NAprcp
+
+```
+
+<br>
+
+Wind speed
+
+```{r, message=FALSE, comment=NA, warning=FALSE}
+
+
+df2movingaveWDSP <- df2 %>%
+  select(reg_date, sratewdsp = WDSP) %>%
+  mutate(srate_ma5wdsp = rollmean(sratewdsp, k = 5, fill = NA),
+         srate_ma10wdsp = rollmean(sratewdsp, k = 10, fill = NA),
+         srate_ma25wdsp = rollmean(sratewdsp, k = 25, fill = NA),
+         srate_ma70wdsp = rollmean(sratewdsp, k = 70, fill = NA),
+         srate_ma100wdsp = rollmean(sratewdsp, k = 100, fill = NA))
+
+#plot count and wind moving average
+
+wdspma <- df2movingaveWDSP %>%
+  gather(metric, value, srate_ma70wdsp) %>%
+  ggplot(aes(reg_date, value, color = metric)) +
+  geom_line()+
+  labs(title = "Wind Speed",
+       subtitle = "10 week moving average",
+       y="Wind speed (m/s)",
+       x="Epidemiological week") +
+  theme(panel.border = element_rect(colour = "black", fill=NA, size=0.5), legend.position = "none") +
+  scale_color_manual(values=c("#f4a261"))  +
+  scale_x_date(date_breaks = "20 weeks",
+               date_labels = "%Y-w%W") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))+ 
+  theme(plot.title = element_text(size=12))
+
+wdspma
+
+```
+
+<br>
+
+Dew point/humidity
+
+```{r, message=FALSE, comment=NA, warning=FALSE}
+
+
+ggplot(data = df2) +
+  geom_line(mapping = aes(x = reg_date, y = DEWP))
+
+#calculate moving average humidity with different levels of variability
+
+df2movingaveDEWP <- df2 %>%
+  select(reg_date, sratedewp = WDSP) %>%
+  mutate(srate_ma5dewp = rollmean(sratedewp, k = 5, fill = NA),
+         srate_ma10dewp = rollmean(sratedewp, k = 10, fill = NA),
+         srate_ma25dewp = rollmean(sratedewp, k = 25, fill = NA),
+         srate_ma70dewp = rollmean(sratedewp, k = 70, fill = NA),
+         srate_ma100dewp = rollmean(sratedewp, k = 100, fill = NA))
+
+
+#plot count and humidity
+
+dewpma <- df2movingaveDEWP %>%
+  gather(metric, value, srate_ma70dewp) %>%
+  ggplot(aes(reg_date, value, color = metric)) +
+  geom_line()+
+  labs(title = "Humidity",
+       subtitle = "Blantyre, Malawi: 10 week moving average",
+       y="Dew point (Celsius)",
+       x="Epidemiological week") +
+  theme(panel.border = element_rect(colour = "black", fill=NA, size=0.5), legend.position = "none") +
+  scale_color_manual(values=c("#e63946"))  +
+  scale_x_date(date_breaks = "20 weeks",
+               date_labels = "%Y-w%W") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))+ 
+  theme(plot.title = element_text(size=12))
+
+dewpma
+
+```
+
+<br>
+
+## 10. Figure 3: Combine weather plots
+
+```{r, message=FALSE, comment=NA, warning=FALSE}
+
+ggarrange(dewpma,  wdspma, tempma, prcpma,
+          labels = c("A", "B", "C", "D"),
+          ncol = 2, nrow = 2)
+
+ggsave(here("figures/figure2.png"), dpi=600, width=14, height=8)
+
+
+```
+
+<br>
+
+Try an alternative plot, with TB CNRs and weather in one plot
+
+```{r, message=FALSE, comment=NA, warning=FALSE}
+
+patchwork <- (CNR10wma + graphbysex) /
+(graphbyHIV + graphbyage) /
+(tempma + prcpma)
+          
+patchwork + plot_annotation(tag_levels = 'A')
+
+ggsave(here("figures/figure2_alternative.png"), dpi=600, width=9, height=10)
+
+
+```
+
+<br>
+
+## 11. Regression analysis
+
+First load the cleaned data
+
+```{r, message=FALSE, comment=NA, warning=FALSE}
+
+set.seed(1988)
+load(here("data/tb.dlnm.RData"))
+d_q$wk <- epiweek(ymd(d_q$y_w))
+d_q <- subset(d_q,select=c(y_w,wk,year,n,prcp,temp))
+
+```
+
+<br>
+
+quasiPoisson variant from poisson likelikehood for QAIC estimation
+
+
+```{r, message=FALSE, comment=NA, warning=FALSE}
+tb.quasipois <- function(...){
+  res <- quasipoisson(...)
+  res$aic <- poisson(...)$aic 
+  res
+}
+
+#temp table to hold QAIC values
+QAICtable <- data.frame(model.no=rep(NA,1),lag.df=rep(NA,1),r.df=rep(NA,1),t.df=rep(NA,1), QAIC.r=rep(NA,1),QAIC.t=rep(NA,1),QAIC.rt=rep(NA,1))
+
+
+```
+
+<br>
+
+loop through each model (with unique degrees of freedom for lag & each weather covariate)
+
+
+```{r, message=FALSE, comment=NA, warning=FALSE}
+n=1
+    for(k in 3:5){
+      for(j in 3:5){
+        for(i in 3:5){
+      
+      #set degrees of freedom (DoF) for natural spline via knots
+      lagk <- logknots(5, fun="ns", df=i)
+      vark.r=equalknots(d_q$prcp, fun="ns", df=j)
+      vark.t=equalknots(d_q$temp, fun="ns", df=k)
+      
+      #construst cross basis (cb) functions and set plaausible DoF for natural spline via knots
+      cb.rain <- crossbasis(d_q$prcp, lag=20, argvar=list(fun="ns", knots=vark.r), arglag=list(knots=lagk))
+      cb.temp <- crossbasis(d_q$temp, lag=20, argvar=list(fun="ns", knots=vark.t), arglag=list(knots=lagk))
+
+      #construct plausible generalised linear models to fit to the data
+      model.r <- glm(d_q$n ~ cb.rain + wk + year, family=tb.quasipois(), d_q)
+      model.t <- glm(d_q$n ~ cb.temp + wk + year, family=tb.quasipois(), d_q)
+      model.rt <- glm(d_q$n ~ cb.rain + wk + cb.temp + year, family=tb.quasipois(), d_q)
+
+      #output the QAIC values to internal table
+      QAICtable[n,] <- c(n,i,j,k,
+                         QAIC(model.r, chat=summary(model.r)$dispersion), 
+                         QAIC(model.t, chat=summary(model.t)$dispersion), 
+                         QAIC(model.rt, chat=summary(model.rt)$dispersion))
+      n=n+1 
+        }
+      }
+    }
+
+```
+
+<br>
+
+Predict the effects of weather on TB notifications
+models for rain-lag and temp-lag seperately are most optimal for generating minimum QAIC score
+
+reconstruct cross-basis functions for rainfall and temperature given the optimal DoF
+
+
+```{r, message=FALSE, comment=NA, warning=FALSE}
+lagk=logknots(20, fun="ns", df=3)
+vark=equalknots(d_q$prcp, fun="ns", df=3)
+cb.rain <- crossbasis(d_q$prcp, lag=20, argvar=list(knots=vark), arglag=list(knots=lagk))
+
+lagk=logknots(20, fun="ns", df=3)
+vark=equalknots(d_q$temp, fun="ns", df=3)
+cb.temp <- crossbasis(d_q$temp, lag=20, argvar=list(knots=vark), arglag=list(knots=lagk))
+
+#fit two models for rainfall and temperature seperately in generalised linear framework
+model.r <- glm(n ~ cb.rain + wk + year, family=quasipoisson(), na.action=na.exclude, d_q)
+model.t <- glm(n ~ cb.temp + wk + year, family=quasipoisson(), na.action=na.exclude, d_q)
+
+#validate rainfall model by minimising high partial/auto-correlation (outside blue dotted lines)
+pacf(residuals(model.r,type="deviance"),na.action=na.omit,main="Partial autocorrelation",xlim=c(0,20))
+model.r <- update(model.r,.~.+lag(residuals(model.r,type="deviance"),1))
+model.r <- update(model.r,.~.+lag(residuals(model.r,type="deviance"),2))
+
+#validate temperature model by minimising high partial/auto-correlation (outside blue dotted lines)
+pacf(residuals(model.t,type="deviance"),na.action=na.omit,main="Partial autocorrelation",xlim=c(0,20))
+model.t <- update(model.t,.~.+lag(residuals(model.t,type="deviance"),2))
+model.t <- update(model.t,.~.+lag(residuals(model.t,type="deviance"),13))
+model.t <- update(model.t,.~.+lag(residuals(model.t,type="deviance"),17))
+
+#predict (nowcast) the effect on TB notification of rainfall/temperature
+pred.rain <- crosspred(cb.rain, model.r, cen=0, by=0.2)
+pred.temp <- crosspred(cb.temp, model.t, cen=17, by=0.2)
+
+#plot 3D, countour and curves for rainfall on TB notifications
+par(mgp=c(2.3,1,0),mai=c(0.9,0.9,0.3,0.2))
+plot(pred.rain, "contour", key.title=title("TBN"), plot.title=title("A", xlab ="Weekly mean rainfall (mm)", ylab = "Weekly lag", cex.lab=1, cex.axis=1))
+plot(pred.rain, "slices", type="p", pch=19, cex=1.3, var=18, col="purple", ci.level=0.5, ci="bars", ylab="Report ratio", xlab="Weekly lag", main="B")
+plot(pred.rain, "slices", type="p", pch=19, cex=1.3, var=30, col="purple", ci.level=0.5, ci="bars", ylab="Report ratio", xlab="Weekly lag", main="C")
+
+#plot 3D, countour and curves for temperature on TB notifications
+par(mgp=c(2.3,1,0),mai=c(0.9,0.9,0.3,0.2))
+plot(pred.temp, "contour", key.title=title("TBN"), plot.title=title("D", xlab ="Weekly mean temperature (°C)", ylab = "Weekly lag", cex.lab=1, cex.axis=1))
+plot(pred.temp, "slices", type="p", pch=19, cex=1.3, var=20, col="red2", ci.level=0.5, ci="bars", ylab="Report ratio", xlab="Weekly lag", main="E")
+plot(pred.temp, "slices", type="p", pch=19, cex=1.3, var=30, col="red2", ci.level=0.5, ci="bars", ylab="Report ratio", xlab="Weekly lag", main="F")
+
+
+
+
+```
+
+<br>
+
+Model diagnostics and goodness of fit
+
+```{r, message=FALSE, comment=NA, warning=FALSE}
+
+#compute mean absolute percentage error (MAPE) between observed and predicted values
+sort(d_q$y_w, decreasing=FALSE)
+errors.r <- subset(subset(d_q,select=c(y_w,n)), date(y_w)>='2011-12-26')
+errors.r$pred.r <- model.r$fitted.values
+mape(errors.r$n,errors.r$pred.r)*100
+errors.r <- subset(subset(d_q,select=c(y_w,n)), date(y_w)>='2012-07-16')
+errors.r$pred.t <- model.t$fitted.values
+mape(errors.r$n,errors.r$pred.t)*100
+
+#plot TB notification diagnostics for all covariates
+par(mfrow=c(2,4),mai=c(0.6,0.6,0.1,0.2))
+
+```
+
+<br>
+
+Extract the data for combined plot
+
+```{r, message=FALSE, comment=NA, warning=FALSE}
+#rainfall
+a_rain <- pred.rain$matRRfit %>% 
+  data.frame() %>%
+  rownames_to_column(var="var") %>%
+  mutate(var=as.numeric(var)) %>%
+  filter(var==18 | var==30) %>%
+  mutate(comparison = case_when(var==18 ~ "Mid (18mm) vs. low (0mm)",
+                                var==30 ~ "High (30mm) vs. low (0mm)"),
+         variable="Overall",
+         model = "Rainfall") %>%
+  pivot_longer(cols = lag0:lag20)
+
+a_rain_ci_lo <- pred.rain$matRRlow %>% 
+  data.frame() %>%
+  rownames_to_column(var="var") %>%
+  mutate(var=as.numeric(var)) %>%
+  filter(var==18 | var==30) %>%
+  pivot_longer(cols = lag0:lag20) %>%
+  rename(ci_lo=value)
+
+a_rain_ci_hi <- pred.rain$matRRhigh %>% 
+  data.frame() %>%
+  rownames_to_column(var="var") %>%
+  mutate(var=as.numeric(var)) %>%
+  filter(var==18 | var==30) %>%
+  pivot_longer(cols = lag0:lag20) %>%
+  rename(ci_hi=value)
+
+a1 <- left_join(a_rain, a_rain_ci_lo)
+a1 <- left_join(a1, a_rain_ci_hi)
+
+#temp
+a_temp <- pred.temp$matRRfit %>% 
+  data.frame() %>%
+  rownames_to_column(var="var") %>%
+  mutate(var=as.numeric(var)) %>%
+  filter(var==20 | var==30) %>%
+  mutate(comparison = case_when(var==20 ~ "Mid (20°C) vs. low (17°C)",
+                                var==30 ~ "High (30°C) vs. low (17°C)"),
+         variable="Overall",
+         model = "Temperature") %>%
+  pivot_longer(cols = lag0:lag20)
+
+a_temp_ci_lo <- pred.temp$matRRlow %>% 
+  data.frame() %>%
+  rownames_to_column(var="var") %>%
+  mutate(var=as.numeric(var)) %>%
+  filter(var==20 | var==30) %>%
+  pivot_longer(cols = lag0:lag20) %>%
+  rename(ci_lo=value)
+
+a_temp_ci_hi <- pred.temp$matRRhigh %>% 
+  data.frame() %>%
+  rownames_to_column(var="var") %>%
+  mutate(var=as.numeric(var)) %>%
+  filter(var==20 | var==30) %>%
+  pivot_longer(cols = lag0:lag20) %>%
+  rename(ci_hi=value)
+
+a2 <- left_join(a_temp, a_temp_ci_lo)
+a2 <- left_join(a2, a_temp_ci_hi)
+
+a <- bind_rows(a1, a2)
+
+a <- a %>%
+  mutate(lag = parse_number(name))
+
+a %>%
+  ggplot() +
+  geom_pointrange(aes(x=lag, y=value, ymin=ci_lo, ymax=ci_hi, group=comparison, colour=comparison),
+                  position=position_jitterdodge()) +
+  facet_grid(comparison~model)
+  
+
+```
+
+<br>
+
+
+```{r, message=FALSE, comment=NA, warning=FALSE}
+
+#rainfall
+plot(d_q$y_w, residuals(model.r,type="deviance"), pch=19, cex=0.8, col=grey(0.6), ylab="Residuals",xlab="",cex.lab=1.2,cex.axis=1.2); abline(h=0,lty=3,lwd=3); title("A",adj=0.95, line=-1)
+pacf(residuals(model.r, type="deviance"), na.action=na.omit, xlim=c(0,20), xlab="", cex.lab=1.2, cex.axis=1.2); title("B",adj=0.95, line=-1)
+acf(residuals(model.r,type="deviance"),na.action=na.omit, xlim=c(0,20),xlab="", cex.lab=1.2, cex.axis=1.2); title("C",adj=0.95, line=-1)
+plot(matrix(d_q$n), matrix(predict(model.r,type="response")), col=c("orange2","gray30"), xlab="", ylab="Observed TB notification", pch=19, cex=0.8, cex.lab=1.2, cex.axis=1.2); title("D",adj=0.95, line=-1)
+mtext("MAPE=17.8%",side=3,line=-16.5,adj=0.9,cex=0.7)
+legend("topleft", legend=c("observed", "predicted"), col=c("grey30","orange2"), cex=0.8, pch=19)
+
+#temperature
+plot(d_q$y_w, residuals(model.t,type="deviance"), pch=19, cex=0.8, col=grey(0.6), ylab="Residuals",xlab="Year",cex.lab=1.2,cex.axis=1.2); abline(h=0,lty=3,lwd=3); title("E",adj=0.95, line=-1)
+pacf(residuals(model.t, type="deviance"), na.action=na.omit, xlim=c(0,20), xlab="Weekly lag", cex.lab=1.2, cex.axis=1.2); title("F",adj=0.95, line=-1)
+acf(residuals(model.t,type="deviance"),na.action=na.omit, xlim=c(0,20),xlab="Weekly lag", cex.lab=1.2, cex.axis=1.2); title("G",adj=0.95, line=-1)
+plot(matrix(d_q$n), matrix(predict(model.t,type="response")), col=c("orange2","gray30"), xlab="Predicted TB notification", ylab="Observed TB notification", pch=19, cex=0.8, cex.lab=1.2, cex.axis=1.2); title("H",adj=0.95, line=-1)
+mtext("MAPE=17.3%",side=3,line=-16.5,adj=0.9,cex=0.7)
+
+```
+stratified analyses on covariates mediating effects of weather on TB notification
+
+```{r, message=FALSE, comment=NA, warning=FALSE}
+load(here("data/tb_cases_2011_2018.rda"))
+
+#load age, sex, hiv and micro datasets
+d_q_sex <- subset(subset(tb_cases_2011_2018,select=c(reg_date,sex)),!is.na(sex))
+d_q_hiv <- subset(subset(tb_cases_2011_2018,select=c(reg_date,hiv)),!is.na(hiv))
+d_q_age <- subset(subset(tb_cases_2011_2018,select=c(reg_date,age)),!is.na(age))
+d_q_micro <- subset(subset(tb_cases_2011_2018,select=c(reg_date,smr_xpert_any)),!is.na(smr_xpert_any))
+remove(tb_cases_2011_2018)
+
+#combine the sex dataset with weather dataset
+d_q_sex$year <- year(d_q_sex$reg_date)
+d_q_sex$sex <- if_else(d_q_sex$sex=="Female",0,1)
+d_q_sex$wk <- epiweek(ymd(d_q_sex$reg_date))
+d_q_sex <- d_q_sex %>% group_by(year,wk,sex) %>% tally()
+d_q_sex <- rename(d_q_sex,"ncase"="n")
+d_q_sex <- subset(merge(x=d_q_sex, y=d_q, by=c("year","wk"),all.y=TRUE), select=c(y_w,wk,year,sex,ncase,prcp,temp))
+
+#combine the hiv dataset with weather dataset
+d_q_hiv$year <- year(d_q_hiv$reg_date)
+d_q_hiv$hiv <- if_else(d_q_hiv$hiv=="a) HIV-negative",0,1)
+d_q_hiv$wk <- epiweek(ymd(d_q_hiv$reg_date))
+d_q_hiv <- d_q_hiv %>% group_by(year,wk,hiv) %>% tally()
+d_q_hiv <- rename(d_q_hiv,"ncase"="n")
+d_q_hiv <- subset(merge(x=d_q_hiv, y=d_q, by=c("year","wk"),all.y=TRUE), select=c(y_w,wk,year,hiv,ncase,prcp,temp))
+
+#combine the age dataset with weather dataset
+d_q_age$year <- year(d_q_age$reg_date)
+d_q_age$age <- if_else(d_q_age$age<=24,0,if_else(d_q_age$age>24 & d_q_age$age<=49,1,2))
+d_q_age$wk <- epiweek(ymd(d_q_age$reg_date))
+d_q_age <- d_q_age %>% group_by(year,wk,age) %>% tally()
+d_q_age <- rename(d_q_age,"ncase"="n")
+d_q_age <- subset(merge(x=d_q_age, y=d_q, by=c("year","wk"),all.y=TRUE), select=c(y_w,wk,year,age,ncase,prcp,temp))
+
+#combine the micro dataset with weather dataset
+d_q_micro$year <- year(d_q_micro$reg_date)
+d_q_micro$smr_xpert_any <- if_else(d_q_micro$smr_xpert_any=="b) Smr/Xpert-positive",1,0)
+d_q_micro$wk <- epiweek(ymd(d_q_micro$reg_date))
+d_q_micro <- d_q_micro %>% group_by(year,wk,smr_xpert_any) %>% tally()
+d_q_micro <- rename(d_q_micro,"ncase"="n")
+d_q_micro <- subset(merge(x=d_q_micro, y=d_q, by=c("year","wk"),all.y=TRUE), select=c(y_w,wk,year,smr_xpert_any,ncase,prcp,temp))
+
+```
+
+<br>
+
+stratification by female sex
+reconstruct cross-basis functions for rainfall and temperature given the optimal DoF
+
+
+```{r, message=FALSE, comment=NA, warning=FALSE}
+
+d_q_sex0 <- subset(d_q_sex,sex==0)
+
+sort(d_q_sex0$prcp, decreasing=FALSE)
+lagk=logknots(20, fun="ns", df=3)
+vark=equalknots(d_q_sex0$prcp, fun="ns", df=3)
+cb.rain <- crossbasis(d_q_sex0$prcp, lag=20, argvar=list(knots=vark), arglag=list(knots=lagk))
+
+lagk=logknots(20, fun="ns", df=3)
+vark=equalknots(d_q_sex0$temp, fun="ns", df=3)
+cb.temp <- crossbasis(d_q_sex0$temp, lag=20, argvar=list(knots=vark), arglag=list(knots=lagk))
+
+#fit two models for rainfall and temperature seperately in generalised linear framework
+model.r <- glm(ncase ~ cb.rain + wk + year, family=quasipoisson(), na.action=na.exclude, d_q_sex0)
+model.t <- glm(ncase ~ cb.temp + wk + year, family=quasipoisson(), na.action=na.exclude, d_q_sex0)
+
+#validate rainfall model by minimising high partial/auto-correlation (outside blue dotted lines)
+pacf(residuals(model.r,type="deviance"),na.action=na.omit,main="Partial autocorrelation",xlim=c(0,20))
+
+#validate temperature model by minimising high partial/auto-correlation (outside blue dotted lines)
+pacf(residuals(model.t,type="deviance"),na.action=na.omit,main="Partial autocorrelation",xlim=c(0,20))
+
+#predict (nowcast) the effect on TB notification of rainfall/temperature
+pred.rain <- crosspred(cb.rain, model.r, cen=0, by=0.2)
+pred.temp <- crosspred(cb.temp, model.t, cen=17, by=0.2)
+
+#plot 3D, countour and curves for rainfall on TB notifications
+par(mgp=c(2.3,1,0),mai=c(0.9,0.9,0.3,0.2))
+plot(pred.rain, "contour", key.title=title("TBN"), plot.title=title("A", xlab ="Weekly mean rainfall (mm)", ylab = "Weekly lag", cex.lab=1, cex.axis=1))
+plot(pred.rain, "slices", type="p", pch=19, cex=1.3, var=18, col="purple", ci.level=0.5, ci="bars", ylab="Report ratio", xlab="Weekly lag", main="B")
+plot(pred.rain, "slices", type="p", pch=19, cex=1.3, var=30, col="purple", ci.level=0.5, ci="bars", ylab="Report ratio", xlab="Weekly lag", main="C")
+
+#plot 3D, countour and curves for temperature on TB notifications
+par(mgp=c(2.3,1,0),mai=c(0.9,0.9,0.3,0.2))
+plot(pred.temp, "contour", key.title=title("TBN"), plot.title=title("D", xlab ="Weekly mean temperature (°C)", ylab = "Weekly lag", cex.lab=1, cex.axis=1))
+plot(pred.temp, "slices", type="p", pch=19, cex=1.3, var=20, col="red2", ci.level=0.5, ci="bars", ylab="Report ratio", xlab="Weekly lag", main="E")
+plot(pred.temp, "slices", type="p", pch=19, cex=1.3, var=30, col="red2", ci.level=0.5, ci="bars", ylab="Report ratio", xlab="Weekly lag", main="F")
+
+
+
+```
+
+
+<br>
+
+Extract the data for combined plot
+
+```{r, message=FALSE, comment=NA, warning=FALSE}
+#rainfall
+b_rain <- pred.rain$matRRfit %>% 
+  data.frame() %>%
+  rownames_to_column(var="var") %>%
+  mutate(var=as.numeric(var)) %>%
+  filter(var==18 | var==30) %>%
+  mutate(comparison = case_when(var==18 ~ "Mid (18mm) vs. low (0mm)",
+                                var==30 ~ "High (30mm) vs. low (0mm)"),
+         variable="Female",
+         model = "Rainfall") %>%
+  pivot_longer(cols = lag0:lag20)
+
+b_rain_ci_lo <- pred.rain$matRRlow %>% 
+  data.frame() %>%
+  rownames_to_column(var="var") %>%
+  mutate(var=as.numeric(var)) %>%
+  filter(var==18 | var==30) %>%
+  pivot_longer(cols = lag0:lag20) %>%
+  rename(ci_lo=value)
+
+b_rain_ci_hi <- pred.rain$matRRhigh %>% 
+  data.frame() %>%
+  rownames_to_column(var="var") %>%
+  mutate(var=as.numeric(var)) %>%
+  filter(var==18 | var==30) %>%
+  pivot_longer(cols = lag0:lag20) %>%
+  rename(ci_hi=value)
+
+b1 <- left_join(b_rain, b_rain_ci_lo)
+b1 <- left_join(b1, b_rain_ci_hi)
+
+#temp
+b_temp <- pred.temp$matRRfit %>% 
+  data.frame() %>%
+  rownames_to_column(var="var") %>%
+  mutate(var=as.numeric(var)) %>%
+  filter(var==20 | var==30) %>%
+  mutate(comparison = case_when(var==20 ~ "Mid (20°C) vs. low (17°C)",
+                                var==30 ~ "High (30°C) vs. low (17°C)"),
+         variable="Female",
+         model = "Temperature") %>%
+  pivot_longer(cols = lag0:lag20)
+
+b_temp_ci_lo <- pred.temp$matRRlow %>% 
+  data.frame() %>%
+  rownames_to_column(var="var") %>%
+  mutate(var=as.numeric(var)) %>%
+  filter(var==20 | var==30) %>%
+  pivot_longer(cols = lag0:lag20) %>%
+  rename(ci_lo=value)
+
+b_temp_ci_hi <- pred.temp$matRRhigh %>% 
+  data.frame() %>%
+  rownames_to_column(var="var") %>%
+  mutate(var=as.numeric(var)) %>%
+  filter(var==20 | var==30) %>%
+  pivot_longer(cols = lag0:lag20) %>%
+  rename(ci_hi=value)
+
+b2 <- left_join(b_temp, b_temp_ci_lo)
+b2 <- left_join(b2, b_temp_ci_hi)
+
+b <- bind_rows(b1, b2)
+
+b <- b %>%
+  mutate(lag = parse_number(name))
+
+b %>%
+  ggplot() +
+  geom_pointrange(aes(x=lag, y=value, ymin=ci_lo, ymax=ci_hi, group=comparison, colour=comparison),
+                  position=position_jitterdodge()) +
+  facet_grid(comparison~model)
+  
+
+```
+
+<br>
+
+stratification by male sex
+reconstruct cross-basis functions for rainfall and temperature given the optimal DoF
+
+```{r, message=FALSE, comment=NA, warning=FALSE}
+
+d_q_sex1 <- subset(d_q_sex,sex==1)
+
+sort(d_q_sex1$prcp, decreasing=FALSE)
+lagk=logknots(20, fun="ns", df=3)
+vark=equalknots(d_q_sex1$prcp, fun="ns", df=3)
+cb.rain <- crossbasis(d_q_sex1$prcp, lag=20, argvar=list(knots=vark), arglag=list(knots=lagk))
+
+sort(d_q_sex1$temp, decreasing=FALSE)
+lagk=logknots(20, fun="ns", df=3)
+vark=equalknots(d_q_sex1$temp, fun="ns", df=3)
+cb.temp <- crossbasis(d_q_sex1$temp, lag=20, argvar=list(knots=vark), arglag=list(knots=lagk))
+
+#fit two models for rainfall and temperature seperately in generalised linear framework
+model.r <- glm(ncase ~ cb.rain + wk + year, family=quasipoisson(), na.action=na.exclude, d_q_sex1)
+model.t <- glm(ncase ~ cb.temp + wk + year, family=quasipoisson(), na.action=na.exclude, d_q_sex1)
+
+#validate rainfall model by minimising high partial/auto-correlation (outside blue dotted lines)
+pacf(residuals(model.r,type="deviance"),na.action=na.omit,main="Partial autocorrelation",xlim=c(0,20))
+
+#validate temperature model by minimising high partial/auto-correlation (outside blue dotted lines)
+pacf(residuals(model.t,type="deviance"),na.action=na.omit,main="Partial autocorrelation",xlim=c(0,20))
+model.t <- update(model.t,.~.+lag(residuals(model.t,type="deviance"),9))
+
+#predict (nowcast) the effect on TB notification of rainfall/temperature
+pred.rain <- crosspred(cb.rain, model.r, cen=0, by=0.2)
+pred.temp <- crosspred(cb.temp, model.t, cen=17, by=0.2)
+
+#plot 3D, countour and curves for rainfall on TB notifications
+par(mgp=c(2.3,1,0),mai=c(0.9,0.9,0.3,0.2))
+plot(pred.rain, "contour", key.title=title("TBN"), plot.title=title("A", xlab ="Weekly mean rainfall (mm)", ylab = "Weekly lag", cex.lab=1, cex.axis=1))
+plot(pred.rain, "slices", type="p", pch=19, cex=1.3, var=18, col="purple", ci.level=0.5, ci="bars", ylab="Report ratio", xlab="Weekly lag", main="B")
+plot(pred.rain, "slices", type="p", pch=19, cex=1.3, var=30, col="purple", ci.level=0.5, ci="bars", ylab="Report ratio", xlab="Weekly lag", main="C")
+
+#plot 3D, countour and curves for temperature on TB notifications
+par(mgp=c(2.3,1,0),mai=c(0.9,0.9,0.3,0.2))
+plot(pred.temp, "contour", key.title=title("TBN"), plot.title=title("D", xlab ="Weekly mean temperature (°C)", ylab = "Weekly lag", cex.lab=1, cex.axis=1))
+plot(pred.temp, "slices", type="p", pch=19, cex=1.3, var=20, col="red2", ci.level=0.5, ci="bars", ylab="Report ratio", xlab="Weekly lag", main="E")
+plot(pred.temp, "slices", type="p", pch=19, cex=1.3, var=30, col="red2", ci.level=0.5, ci="bars", ylab="Report ratio", xlab="Weekly lag", main="F")
+
+
+```
+
+<br>
+
+Extract the data for combined plot
+
+```{r, message=FALSE, comment=NA, warning=FALSE}
+#rainfall
+c_rain <- pred.rain$matRRfit %>% 
+  data.frame() %>%
+  rownames_to_column(var="var") %>%
+  mutate(var=as.numeric(var)) %>%
+  filter(var==18 | var==30) %>%
+  mutate(comparison = case_when(var==18 ~ "Mid (18mm) vs. low (0mm)",
+                                var==30 ~ "High (30mm) vs. low (0mm)"),
+         variable="Male",
+         model = "Rainfall") %>%
+  pivot_longer(cols = lag0:lag20)
+
+c_rain_ci_lo <- pred.rain$matRRlow %>% 
+  data.frame() %>%
+  rownames_to_column(var="var") %>%
+  mutate(var=as.numeric(var)) %>%
+  filter(var==18 | var==30) %>%
+  pivot_longer(cols = lag0:lag20) %>%
+  rename(ci_lo=value)
+
+c_rain_ci_hi <- pred.rain$matRRhigh %>% 
+  data.frame() %>%
+  rownames_to_column(var="var") %>%
+  mutate(var=as.numeric(var)) %>%
+  filter(var==18 | var==30) %>%
+  pivot_longer(cols = lag0:lag20) %>%
+  rename(ci_hi=value)
+
+c1 <- left_join(c_rain, c_rain_ci_lo)
+c1 <- left_join(c1, c_rain_ci_hi)
+
+#temp
+c_temp <- pred.temp$matRRfit %>% 
+  data.frame() %>%
+  rownames_to_column(var="var") %>%
+  mutate(var=as.numeric(var)) %>%
+  filter(var==20 | var==30) %>%
+  mutate(comparison = case_when(var==20 ~ "Mid (20°C) vs. low (17°C)",
+                                var==30 ~ "High (30°C) vs. low (17°C)"),
+         variable="Male",
+         model = "Temperature") %>%
+  pivot_longer(cols = lag0:lag20)
+
+c_temp_ci_lo <- pred.temp$matRRlow %>% 
+  data.frame() %>%
+  rownames_to_column(var="var") %>%
+  mutate(var=as.numeric(var)) %>%
+  filter(var==20 | var==30) %>%
+  pivot_longer(cols = lag0:lag20) %>%
+  rename(ci_lo=value)
+
+c_temp_ci_hi <- pred.temp$matRRhigh %>% 
+  data.frame() %>%
+  rownames_to_column(var="var") %>%
+  mutate(var=as.numeric(var)) %>%
+  filter(var==20 | var==30) %>%
+  pivot_longer(cols = lag0:lag20) %>%
+  rename(ci_hi=value)
+
+c2 <- left_join(c_temp, c_temp_ci_lo)
+c2 <- left_join(c2, c_temp_ci_hi)
+
+c <- bind_rows(c1, c2)
+
+c <- c %>%
+  mutate(lag = parse_number(name))
+
+c %>%
+  ggplot() +
+  geom_pointrange(aes(x=lag, y=value, ymin=ci_lo, ymax=ci_hi, group=comparison, colour=comparison),
+                  position=position_jitterdodge()) +
+  facet_grid(comparison~model)
+  
+
+```
+
+<br>
+
+stratification by hiv negative
+reconstruct cross-basis functions for rainfall and temperature given the optimal DoF
+
+```{r, message=FALSE, comment=NA, warning=FALSE}
+
+d_q_hiv0 <- subset(d_q_hiv,hiv==0)
+
+sort(d_q_hiv0$prcp, decreasing=FALSE)
+lagk=logknots(20, fun="ns", df=3)
+vark=equalknots(d_q_hiv0$prcp, fun="ns", df=3)
+cb.rain <- crossbasis(d_q_hiv0$prcp, lag=20, argvar=list(knots=vark), arglag=list(knots=lagk))
+
+sort(d_q_hiv0$temp, decreasing=FALSE)
+lagk=logknots(20, fun="ns", df=3)
+vark=equalknots(d_q_hiv0$temp, fun="ns", df=3)
+cb.temp <- crossbasis(d_q_hiv0$temp, lag=20, argvar=list(knots=vark), arglag=list(knots=lagk))
+
+#fit two models for rainfall and temperature seperately in generalised linear framework
+model.r <- glm(ncase ~ cb.rain + wk + year, family=quasipoisson(), na.action=na.exclude, d_q_hiv0)
+model.t <- glm(ncase ~ cb.temp + wk + year, family=quasipoisson(), na.action=na.exclude, d_q_hiv0)
+
+#validate rainfall model by minimising high partial/auto-correlation (outside blue dotted lines)
+pacf(residuals(model.r,type="deviance"),na.action=na.omit,main="Partial autocorrelation",xlim=c(0,20))
+model.r <- update(model.r,.~.+lag(residuals(model.r,type="deviance"),1))
+model.r <- update(model.r,.~.+lag(residuals(model.r,type="deviance"),2))
+
+#validate temperature model by minimising high partial/auto-correlation (outside blue dotted lines)
+pacf(residuals(model.t,type="deviance"),na.action=na.omit,main="Partial autocorrelation",xlim=c(0,20))
+model.t <- update(model.t,.~.+lag(residuals(model.t,type="deviance"),2))
+
+#predict (nowcast) the effect on TB notification of rainfall/temperature
+pred.rain <- crosspred(cb.rain, model.r, cen=0, by=0.2)
+pred.temp <- crosspred(cb.temp, model.t, cen=17, by=0.2)
+
+#plot 3D, countour and curves for rainfall on TB notifications
+par(mgp=c(2.3,1,0),mai=c(0.9,0.9,0.3,0.2))
+plot(pred.rain, "contour", key.title=title("TBN"), plot.title=title("A", xlab ="Weekly mean rainfall (mm)", ylab = "Weekly lag", cex.lab=1, cex.axis=1))
+plot(pred.rain, "slices", type="p", pch=19, cex=1.3, var=18, col="purple", ci.level=0.5, ci="bars", ylab="Report ratio", xlab="Weekly lag", main="B")
+plot(pred.rain, "slices", type="p", pch=19, cex=1.3, var=30, col="purple", ci.level=0.5, ci="bars", ylab="Report ratio", xlab="Weekly lag", main="C")
+
+#plot 3D, countour and curves for temperature on TB notifications
+par(mgp=c(2.3,1,0),mai=c(0.9,0.9,0.3,0.2))
+plot(pred.temp, "contour", key.title=title("TBN"), plot.title=title("D", xlab ="Weekly mean temperature (°C)", ylab = "Weekly lag", cex.lab=1, cex.axis=1))
+plot(pred.temp, "slices", type="p", pch=19, cex=1.3, var=20, col="red2", ci.level=0.5, ci="bars", ylab="Report ratio", xlab="Weekly lag", main="E")
+plot(pred.temp, "slices", type="p", pch=19, cex=1.3, var=30, col="red2", ci.level=0.5, ci="bars", ylab="Report ratio", xlab="Weekly lag", main="F")
+
+
+
+```
+
+<br>
+
+Extract the data for combined plot
+
+```{r, message=FALSE, comment=NA, warning=FALSE}
+#rainfall
+d_rain <- pred.rain$matRRfit %>% 
+  data.frame() %>%
+  rownames_to_column(var="var") %>%
+  mutate(var=as.numeric(var)) %>%
+  filter(var==18 | var==30) %>%
+  mutate(comparison = case_when(var==18 ~ "Mid (18mm) vs. low (0mm)",
+                                var==30 ~ "High (30mm) vs. low (0mm)"),
+         variable="HIV-negative",
+         model = "Rainfall") %>%
+  pivot_longer(cols = lag0:lag20)
+
+d_rain_ci_lo <- pred.rain$matRRlow %>% 
+  data.frame() %>%
+  rownames_to_column(var="var") %>%
+  mutate(var=as.numeric(var)) %>%
+  filter(var==18 | var==30) %>%
+  pivot_longer(cols = lag0:lag20) %>%
+  rename(ci_lo=value)
+
+d_rain_ci_hi <- pred.rain$matRRhigh %>% 
+  data.frame() %>%
+  rownames_to_column(var="var") %>%
+  mutate(var=as.numeric(var)) %>%
+  filter(var==18 | var==30) %>%
+  pivot_longer(cols = lag0:lag20) %>%
+  rename(ci_hi=value)
+
+d1 <- left_join(d_rain, d_rain_ci_lo)
+d1 <- left_join(d1, d_rain_ci_hi)
+
+#temp
+d_temp <- pred.temp$matRRfit %>% 
+  data.frame() %>%
+  rownames_to_column(var="var") %>%
+  mutate(var=as.numeric(var)) %>%
+  filter(var==20 | var==30) %>%
+  mutate(comparison = case_when(var==20 ~ "Mid (20°C) vs. low (17°C)",
+                                var==30 ~ "High (30°C) vs. low (17°C)"),
+         variable="HIV-negative",
+         model = "Temperature") %>%
+  pivot_longer(cols = lag0:lag20)
+
+d_temp_ci_lo <- pred.temp$matRRlow %>% 
+  data.frame() %>%
+  rownames_to_column(var="var") %>%
+  mutate(var=as.numeric(var)) %>%
+  filter(var==20 | var==30) %>%
+  pivot_longer(cols = lag0:lag20) %>%
+  rename(ci_lo=value)
+
+d_temp_ci_hi <- pred.temp$matRRhigh %>% 
+  data.frame() %>%
+  rownames_to_column(var="var") %>%
+  mutate(var=as.numeric(var)) %>%
+  filter(var==20 | var==30) %>%
+  pivot_longer(cols = lag0:lag20) %>%
+  rename(ci_hi=value)
+
+d2 <- left_join(d_temp, d_temp_ci_lo)
+d2 <- left_join(d2, d_temp_ci_hi)
+
+d <- bind_rows(d1, d2)
+
+d <- d %>%
+  mutate(lag = parse_number(name))
+
+d %>%
+  ggplot() +
+  geom_pointrange(aes(x=lag, y=value, ymin=ci_lo, ymax=ci_hi, group=comparison, colour=comparison),
+                  position=position_jitterdodge()) +
+  facet_grid(comparison~model)
+  
+
+```
+
+<br>
+
+Stratification by HIV positive
+reconstruct cross-basis functions for rainfall and temperature given the optimal DoF
+
+```{r, message=FALSE, comment=NA, warning=FALSE}
+d_q_hiv1 <- subset(d_q_hiv,hiv==1)
+
+sort(d_q_hiv1$prcp, decreasing=FALSE)
+lagk=logknots(20, fun="ns", df=3)
+vark=equalknots(d_q_hiv1$prcp, fun="ns", df=3)
+cb.rain <- crossbasis(d_q_hiv1$prcp, lag=20, argvar=list(knots=vark), arglag=list(knots=lagk))
+
+sort(d_q_hiv1$temp, decreasing=FALSE)
+lagk=logknots(20, fun="ns", df=3)
+vark=equalknots(d_q_hiv1$temp, fun="ns", df=3)
+cb.temp <- crossbasis(d_q_hiv1$temp, lag=20, argvar=list(knots=vark), arglag=list(knots=lagk))
+
+#fit two models for rainfall and temperature seperately in generalised linear framework
+model.r <- glm(ncase ~ cb.rain + wk + year, family=quasipoisson(), na.action=na.exclude, d_q_hiv1)
+model.t <- glm(ncase ~ cb.temp + wk + year, family=quasipoisson(), na.action=na.exclude, d_q_hiv1)
+
+#validate rainfall model by minimising high partial/auto-correlation (outside blue dotted lines)
+pacf(residuals(model.r,type="deviance"),na.action=na.omit,main="Partial autocorrelation",xlim=c(0,20))
+model.r <- update(model.r,.~.+lag(residuals(model.r,type="deviance"),2))
+model.r <- update(model.r,.~.+lag(residuals(model.r,type="deviance"),14))
+
+#validate temperature model by minimising high partial/auto-correlation (outside blue dotted lines)
+pacf(residuals(model.t,type="deviance"),na.action=na.omit,main="Partial autocorrelation",xlim=c(0,20))
+model.t <- update(model.t,.~.+lag(residuals(model.t,type="deviance"),2))
+model.t <- update(model.t,.~.+lag(residuals(model.t,type="deviance"),14))
+
+#predict (nowcast) the effect on TB notification of rainfall/temperature
+pred.rain <- crosspred(cb.rain, model.r, cen=0, by=0.2)
+pred.temp <- crosspred(cb.temp, model.t, cen=17, by=0.2)
+
+#plot 3D, countour and curves for rainfall on TB notifications
+par(mgp=c(2.3,1,0),mai=c(0.9,0.9,0.3,0.2))
+plot(pred.rain, "contour", key.title=title("TBN"), plot.title=title("A", xlab ="Weekly mean rainfall (mm)", ylab = "Weekly lag", cex.lab=1, cex.axis=1))
+plot(pred.rain, "slices", type="p", pch=19, cex=1.3, var=18, col="purple", ci.level=0.5, ci="bars", ylab="Report ratio", xlab="Weekly lag", main="B")
+plot(pred.rain, "slices", type="p", pch=19, cex=1.3, var=30, col="purple", ci.level=0.5, ci="bars", ylab="Report ratio", xlab="Weekly lag", main="C")
+
+#plot 3D, countour and curves for temperature on TB notifications
+par(mgp=c(2.3,1,0),mai=c(0.9,0.9,0.3,0.2))
+plot(pred.temp, "contour", key.title=title("TBN"), plot.title=title("D", xlab ="Weekly mean temperature (°C)", ylab = "Weekly lag", cex.lab=1, cex.axis=1))
+plot(pred.temp, "slices", type="p", pch=19, cex=1.3, var=20, col="red2", ci.level=0.5, ci="bars", ylab="Report ratio", xlab="Weekly lag", main="E")
+plot(pred.temp, "slices", type="p", pch=19, cex=1.3, var=30, col="red2", ci.level=0.5, ci="bars", ylab="Report ratio", xlab="Weekly lag", main="F")
+
+```
+
+<br>
+
+Extract the data for combined plot
+
+```{r, message=FALSE, comment=NA, warning=FALSE}
+#rainfall
+e_rain <- pred.rain$matRRfit %>% 
+  data.frame() %>%
+  rownames_to_column(var="var") %>%
+  mutate(var=as.numeric(var)) %>%
+  filter(var==18 | var==30) %>%
+  mutate(comparison = case_when(var==18 ~ "Mid (18mm) vs. low (0mm)",
+                                var==30 ~ "High (30mm) vs. low (0mm)"),
+         variable="HIV-positive",
+         model = "Rainfall") %>%
+  pivot_longer(cols = lag0:lag20)
+
+e_rain_ci_lo <- pred.rain$matRRlow %>% 
+  data.frame() %>%
+  rownames_to_column(var="var") %>%
+  mutate(var=as.numeric(var)) %>%
+  filter(var==18 | var==30) %>%
+  pivot_longer(cols = lag0:lag20) %>%
+  rename(ci_lo=value)
+
+e_rain_ci_hi <- pred.rain$matRRhigh %>% 
+  data.frame() %>%
+  rownames_to_column(var="var") %>%
+  mutate(var=as.numeric(var)) %>%
+  filter(var==18 | var==30) %>%
+  pivot_longer(cols = lag0:lag20) %>%
+  rename(ci_hi=value)
+
+e1 <- left_join(e_rain, e_rain_ci_lo)
+e1 <- left_join(e1, e_rain_ci_hi)
+
+#temp
+e_temp <- pred.temp$matRRfit %>% 
+  data.frame() %>%
+  rownames_to_column(var="var") %>%
+  mutate(var=as.numeric(var)) %>%
+  filter(var==20 | var==30) %>%
+  mutate(comparison = case_when(var==20 ~ "Mid (20°C) vs. low (17°C)",
+                                var==30 ~ "High (30°C) vs. low (17°C)"),
+         variable="HIV-positive",
+         model = "Temperature") %>%
+  pivot_longer(cols = lag0:lag20)
+
+e_temp_ci_lo <- pred.temp$matRRlow %>% 
+  data.frame() %>%
+  rownames_to_column(var="var") %>%
+  mutate(var=as.numeric(var)) %>%
+  filter(var==20 | var==30) %>%
+  pivot_longer(cols = lag0:lag20) %>%
+  rename(ci_lo=value)
+
+e_temp_ci_hi <- pred.temp$matRRhigh %>% 
+  data.frame() %>%
+  rownames_to_column(var="var") %>%
+  mutate(var=as.numeric(var)) %>%
+  filter(var==20 | var==30) %>%
+  pivot_longer(cols = lag0:lag20) %>%
+  rename(ci_hi=value)
+
+e2 <- left_join(e_temp, e_temp_ci_lo)
+e2 <- left_join(e2, e_temp_ci_hi)
+
+e <- bind_rows(e1, e2)
+
+e <- e %>%
+  mutate(lag = parse_number(name))
+
+e %>%
+  ggplot() +
+  geom_pointrange(aes(x=lag, y=value, ymin=ci_lo, ymax=ci_hi, group=comparison, colour=comparison),
+                  position=position_jitterdodge()) +
+  facet_grid(comparison~model)
+  
+
+```
+
+<br>
+
+Stratification by younger population
+reconstruct cross-basis functions for rainfall and temperature given the optimal DoF
+
+```{r, message=FALSE, comment=NA, warning=FALSE}
+d_q_age0 <- subset(d_q_age,age==0)
+
+sort(d_q_age0$prcp, decreasing=FALSE)
+lagk=logknots(20, fun="ns", df=3)
+vark=equalknots(d_q_age0$prcp, fun="ns", df=3)
+cb.rain <- crossbasis(d_q_age0$prcp, lag=20, argvar=list(knots=vark), arglag=list(knots=lagk))
+
+sort(d_q_age0$temp, decreasing=FALSE)
+lagk=logknots(20, fun="ns", df=3)
+vark=equalknots(d_q_age0$temp, fun="ns", df=3)
+cb.temp <- crossbasis(d_q_age0$temp, lag=20, argvar=list(knots=vark), arglag=list(knots=lagk))
+
+#fit two models for rainfall and temperature seperately in generalised linear framework
+model.r <- glm(ncase ~ cb.rain + wk + year, family=quasipoisson(), na.action=na.exclude, d_q_age0)
+model.t <- glm(ncase ~ cb.temp + wk + year, family=quasipoisson(), na.action=na.exclude, d_q_age0)
+
+#validate rainfall model by minimising high partial/auto-correlation (outside blue dotted lines)
+pacf(residuals(model.r,type="deviance"),na.action=na.omit,main="Partial autocorrelation",xlim=c(0,20))
+model.r <- update(model.r,.~.+lag(residuals(model.r,type="deviance"),4))
+model.r <- update(model.r,.~.+lag(residuals(model.r,type="deviance"),10))
+model.r <- update(model.r,.~.+lag(residuals(model.r,type="deviance"),11))
+model.r <- update(model.r,.~.+lag(residuals(model.r,type="deviance"),16))
+
+#validate temperature model by minimising high partial/auto-correlation (outside blue dotted lines)
+pacf(residuals(model.t,type="deviance"),na.action=na.omit,main="Partial autocorrelation",xlim=c(0,20))
+model.t <- update(model.t,.~.+lag(residuals(model.t,type="deviance"),4))
+model.t <- update(model.t,.~.+lag(residuals(model.t,type="deviance"),10))
+model.t <- update(model.t,.~.+lag(residuals(model.t,type="deviance"),11))
+model.t <- update(model.t,.~.+lag(residuals(model.t,type="deviance"),16))
+
+#predict (nowcast) the effect on TB notification of rainfall/temperature
+pred.rain <- crosspred(cb.rain, model.r, cen=0, by=0.2)
+pred.temp <- crosspred(cb.temp, model.t, cen=17, by=0.2)
+
+#plot 3D, countour and curves for rainfall on TB notifications
+par(mgp=c(2.3,1,0),mai=c(0.9,0.9,0.3,0.2))
+plot(pred.rain, "contour", key.title=title("TBN"), plot.title=title("A", xlab ="Weekly mean rainfall (mm)", ylab = "Weekly lag", cex.lab=1, cex.axis=1))
+plot(pred.rain, "slices", type="p", pch=19, cex=1.3, var=18, col="purple", ci.level=0.5, ci="bars", ylab="Report ratio", xlab="Weekly lag", main="B")
+plot(pred.rain, "slices", type="p", pch=19, cex=1.3, var=30, col="purple", ci.level=0.5, ci="bars", ylab="Report ratio", xlab="Weekly lag", main="C")
+
+#plot 3D, countour and curves for temperature on TB notifications
+par(mgp=c(2.3,1,0),mai=c(0.9,0.9,0.3,0.2))
+plot(pred.temp, "contour", key.title=title("TBN"), plot.title=title("D", xlab ="Weekly mean temperature (°C)", ylab = "Weekly lag", cex.lab=1, cex.axis=1))
+plot(pred.temp, "slices", type="p", pch=19, cex=1.3, var=20, col="red2", ci.level=0.5, ci="bars", ylab="Report ratio", xlab="Weekly lag", main="E")
+plot(pred.temp, "slices", type="p", pch=19, cex=1.3, var=30, col="red2", ci.level=0.5, ci="bars", ylab="Report ratio", xlab="Weekly lag", main="F")
+
+```
+
+<br>
+
+Extract the data for combined plot
+
+```{r, message=FALSE, comment=NA, warning=FALSE}
+#rainfall
+f_rain <- pred.rain$matRRfit %>% 
+  data.frame() %>%
+  rownames_to_column(var="var") %>%
+  mutate(var=as.numeric(var)) %>%
+  filter(var==18 | var==30) %>%
+  mutate(comparison = case_when(var==18 ~ "Mid (18mm) vs. low (0mm)",
+                                var==30 ~ "High (30mm) vs. low (0mm)"),
+         variable="Young age",
+         model = "Rainfall") %>%
+  pivot_longer(cols = lag0:lag20)
+
+f_rain_ci_lo <- pred.rain$matRRlow %>% 
+  data.frame() %>%
+  rownames_to_column(var="var") %>%
+  mutate(var=as.numeric(var)) %>%
+  filter(var==18 | var==30) %>%
+  pivot_longer(cols = lag0:lag20) %>%
+  rename(ci_lo=value)
+
+f_rain_ci_hi <- pred.rain$matRRhigh %>% 
+  data.frame() %>%
+  rownames_to_column(var="var") %>%
+  mutate(var=as.numeric(var)) %>%
+  filter(var==18 | var==30) %>%
+  pivot_longer(cols = lag0:lag20) %>%
+  rename(ci_hi=value)
+
+f1 <- left_join(f_rain, f_rain_ci_lo)
+f1 <- left_join(f1, f_rain_ci_hi)
+
+#temp
+f_temp <- pred.temp$matRRfit %>% 
+  data.frame() %>%
+  rownames_to_column(var="var") %>%
+  mutate(var=as.numeric(var)) %>%
+  filter(var==20 | var==30) %>%
+  mutate(comparison = case_when(var==20 ~ "Mid (20°C) vs. low (17°C)",
+                                var==30 ~ "High (30°C) vs. low (17°C)"),
+         variable="Young age",
+         model = "Temperature") %>%
+  pivot_longer(cols = lag0:lag20)
+
+f_temp_ci_lo <- pred.temp$matRRlow %>% 
+  data.frame() %>%
+  rownames_to_column(var="var") %>%
+  mutate(var=as.numeric(var)) %>%
+  filter(var==20 | var==30) %>%
+  pivot_longer(cols = lag0:lag20) %>%
+  rename(ci_lo=value)
+
+f_temp_ci_hi <- pred.temp$matRRhigh %>% 
+  data.frame() %>%
+  rownames_to_column(var="var") %>%
+  mutate(var=as.numeric(var)) %>%
+  filter(var==20 | var==30) %>%
+  pivot_longer(cols = lag0:lag20) %>%
+  rename(ci_hi=value)
+
+f2 <- left_join(f_temp, f_temp_ci_lo)
+f2 <- left_join(f2, f_temp_ci_hi)
+
+f <- bind_rows(f1, f2)
+
+f <- f %>%
+  mutate(lag = parse_number(name))
+
+f %>%
+  ggplot() +
+  geom_pointrange(aes(x=lag, y=value, ymin=ci_lo, ymax=ci_hi, group=comparison, colour=comparison),
+                  position=position_jitterdodge()) +
+  facet_grid(comparison~model)
+  
+
+```
+
+<br>
+
+Stratification by middle-age population
+reconstruct cross-basis functions for rainfall and temperature given the optimal DoF
+
+
+```{r, message=FALSE, comment=NA, warning=FALSE}
+d_q_age1 <- subset(d_q_age,age==1)
+
+sort(d_q_age1$prcp, decreasing=FALSE)
+lagk=logknots(20, fun="ns", df=3)
+vark=equalknots(d_q_age1$prcp, fun="ns", df=3)
+cb.rain <- crossbasis(d_q_age1$prcp, lag=20, argvar=list(knots=vark), arglag=list(knots=lagk))
+
+sort(d_q_age1$temp, decreasing=FALSE)
+lagk=logknots(20, fun="ns", df=3)
+vark=equalknots(d_q_age1$temp, fun="ns", df=3)
+cb.temp <- crossbasis(d_q_age1$temp, lag=20, argvar=list(knots=vark), arglag=list(knots=lagk))
+
+#fit two models for rainfall and temperature seperately in generalised linear framework
+model.r <- glm(ncase ~ cb.rain + wk + year, family=quasipoisson(), na.action=na.exclude, d_q_age1)
+model.t <- glm(ncase ~ cb.temp + wk + year, family=quasipoisson(), na.action=na.exclude, d_q_age1)
+
+#validate rainfall model by minimising high partial/auto-correlation (outside blue dotted lines)
+pacf(residuals(model.r,type="deviance"),na.action=na.omit,main="Partial autocorrelation",xlim=c(0,20))
+
+#validate temperature model by minimising high partial/auto-correlation (outside blue dotted lines)
+pacf(residuals(model.t,type="deviance"),na.action=na.omit,main="Partial autocorrelation",xlim=c(0,20))
+
+#predict (nowcast) the effect on TB notification of rainfall/temperature
+pred.rain <- crosspred(cb.rain, model.r, cen=0, by=0.2)
+pred.temp <- crosspred(cb.temp, model.t, cen=17, by=0.2)
+
+#plot 3D, countour and curves for rainfall on TB notifications
+par(mgp=c(2.3,1,0),mai=c(0.9,0.9,0.3,0.2))
+plot(pred.rain, "contour", key.title=title("TBN"), plot.title=title("A", xlab ="Weekly mean rainfall (mm)", ylab = "Weekly lag", cex.lab=1, cex.axis=1))
+plot(pred.rain, "slices", type="p", pch=19, cex=1.3, var=18, col="purple", ci.level=0.5, ci="bars", ylab="Report ratio", xlab="Weekly lag", main="B")
+plot(pred.rain, "slices", type="p", pch=19, cex=1.3, var=30, col="purple", ci.level=0.5, ci="bars", ylab="Report ratio", xlab="Weekly lag", main="C")
+
+#plot 3D, countour and curves for temperature on TB notifications
+par(mgp=c(2.3,1,0),mai=c(0.9,0.9,0.3,0.2))
+plot(pred.temp, "contour", key.title=title("TBN"), plot.title=title("D", xlab ="Weekly mean temperature (°C)", ylab = "Weekly lag", cex.lab=1, cex.axis=1))
+plot(pred.temp, "slices", type="p", pch=19, cex=1.3, var=20, col="red2", ci.level=0.5, ci="bars", ylab="Report ratio", xlab="Weekly lag", main="E")
+plot(pred.temp, "slices", type="p", pch=19, cex=1.3, var=30, col="red2", ci.level=0.5, ci="bars", ylab="Report ratio", xlab="Weekly lag", main="F")
+
+```
+
+<br>
+
+Extract the data for combined plot
+
+```{r, message=FALSE, comment=NA, warning=FALSE}
+#rainfall
+g_rain <- pred.rain$matRRfit %>% 
+  data.frame() %>%
+  rownames_to_column(var="var") %>%
+  mutate(var=as.numeric(var)) %>%
+  filter(var==18 | var==30) %>%
+  mutate(comparison = case_when(var==18 ~ "Mid (18mm) vs. low (0mm)",
+                                var==30 ~ "High (30mm) vs. low (0mm)"),
+         variable="Middle age",
+         model = "Rainfall") %>%
+  pivot_longer(cols = lag0:lag20)
+
+g_rain_ci_lo <- pred.rain$matRRlow %>% 
+  data.frame() %>%
+  rownames_to_column(var="var") %>%
+  mutate(var=as.numeric(var)) %>%
+  filter(var==18 | var==30) %>%
+  pivot_longer(cols = lag0:lag20) %>%
+  rename(ci_lo=value)
+
+g_rain_ci_hi <- pred.rain$matRRhigh %>% 
+  data.frame() %>%
+  rownames_to_column(var="var") %>%
+  mutate(var=as.numeric(var)) %>%
+  filter(var==18 | var==30) %>%
+  pivot_longer(cols = lag0:lag20) %>%
+  rename(ci_hi=value)
+
+g1 <- left_join(g_rain, g_rain_ci_lo)
+g1 <- left_join(g1, g_rain_ci_hi)
+
+#temp
+g_temp <- pred.temp$matRRfit %>% 
+  data.frame() %>%
+  rownames_to_column(var="var") %>%
+  mutate(var=as.numeric(var)) %>%
+  filter(var==20 | var==30) %>%
+  mutate(comparison = case_when(var==20 ~ "Mid (20°C) vs. low (17°C)",
+                                var==30 ~ "High (30°C) vs. low (17°C)"),
+         variable="Middle age",
+         model = "Temperature") %>%
+  pivot_longer(cols = lag0:lag20)
+
+g_temp_ci_lo <- pred.temp$matRRlow %>% 
+  data.frame() %>%
+  rownames_to_column(var="var") %>%
+  mutate(var=as.numeric(var)) %>%
+  filter(var==20 | var==30) %>%
+  pivot_longer(cols = lag0:lag20) %>%
+  rename(ci_lo=value)
+
+g_temp_ci_hi <- pred.temp$matRRhigh %>% 
+  data.frame() %>%
+  rownames_to_column(var="var") %>%
+  mutate(var=as.numeric(var)) %>%
+  filter(var==20 | var==30) %>%
+  pivot_longer(cols = lag0:lag20) %>%
+  rename(ci_hi=value)
+
+g2 <- left_join(g_temp, g_temp_ci_lo)
+g2 <- left_join(g2, g_temp_ci_hi)
+
+g <- bind_rows(g1, g2)
+
+g <- g %>%
+  mutate(lag = parse_number(name))
+
+g %>%
+  ggplot() +
+  geom_pointrange(aes(x=lag, y=value, ymin=ci_lo, ymax=ci_hi, group=comparison, colour=comparison),
+                  position=position_jitterdodge()) +
+  facet_grid(comparison~model)
+  
+
+```
+
+
+<br>
+
+Stratification by older population
+reconstruct cross-basis functions for rainfall and temperature given the optimal DoF
+
+```{r, message=FALSE, comment=NA, warning=FALSE}
+d_q_age2 <- subset(d_q_age,age==2)
+
+sort(d_q_age2$prcp, decreasing=FALSE)
+lagk=logknots(20, fun="ns", df=3)
+vark=equalknots(d_q_age2$prcp, fun="ns", df=3)
+cb.rain <- crossbasis(d_q_age2$prcp, lag=20, argvar=list(knots=vark), arglag=list(knots=lagk))
+
+sort(d_q_age2$temp, decreasing=FALSE)
+lagk=logknots(20, fun="ns", df=3)
+vark=equalknots(d_q_age2$temp, fun="ns", df=3)
+cb.temp <- crossbasis(d_q_age2$temp, lag=20, argvar=list(knots=vark), arglag=list(knots=lagk))
+
+#fit two models for rainfall and temperature seperately in generalised linear framework
+model.r <- glm(ncase ~ cb.rain + wk + year, family=quasipoisson(), na.action=na.exclude, d_q_age2)
+model.t <- glm(ncase ~ cb.temp + wk + year, family=quasipoisson(), na.action=na.exclude, d_q_age2)
+
+#validate rainfall model by minimising high partial/auto-correlation (outside blue dotted lines)
+pacf(residuals(model.r,type="deviance"),na.action=na.omit,main="Partial autocorrelation",xlim=c(0,20))
+model.r <- update(model.r,.~.+lag(residuals(model.r,type="deviance"),14))
+
+#validate temperature model by minimising high partial/auto-correlation (outside blue dotted lines)
+pacf(residuals(model.t,type="deviance"),na.action=na.omit,main="Partial autocorrelation",xlim=c(0,20))
+model.t <- update(model.t,.~.+lag(residuals(model.t,type="deviance"),14))
+
+#predict (nowcast) the effect on TB notification of rainfall/temperature
+pred.rain <- crosspred(cb.rain, model.r, cen=0, by=0.2, ci.level = 0.50)
+pred.temp <- crosspred(cb.temp, model.t, cen=17, by=0.2)
+
+#plot 3D, countour and curves for rainfall on TB notifications
+par(mgp=c(2.3,1,0),mai=c(0.9,0.9,0.3,0.2))
+plot(pred.rain, "contour", key.title=title("TBN"), plot.title=title("A", xlab ="Weekly mean rainfall (mm)", ylab = "Weekly lag", cex.lab=1, cex.axis=1))
+plot(pred.rain, "slices", type="p", pch=19, cex=1.3, var=18, col="purple", ci.level=0.5, ci="bars", ylab="Report ratio", xlab="Weekly lag", main="B")
+plot(pred.rain, "slices", type="p", pch=19, cex=1.3, var=30, col="purple", ci.level=0.5, ci="bars", ylab="Report ratio", xlab="Weekly lag", main="C")
+
+#plot 3D, countour and curves for temperature on TB notifications
+par(mgp=c(2.3,1,0),mai=c(0.9,0.9,0.3,0.2))
+plot(pred.temp, "contour", key.title=title("TBN"), plot.title=title("D", xlab ="Weekly mean temperature (°C)", ylab = "Weekly lag", cex.lab=1, cex.axis=1))
+plot(pred.temp, "slices", type="p", pch=19, cex=1.3, var=20, col="red2", ci.level=0.5, ci="bars", ylab="Report ratio", xlab="Weekly lag", main="E")
+plot(pred.temp, "slices", type="p", pch=19, cex=1.3, var=30, col="red2", ci.level=0.5, ci="bars", ylab="Report ratio", xlab="Weekly lag", main="F")
+
+
+
+```
+
+
+
+Extract the data for combined plot
+
+```{r, message=FALSE, comment=NA, warning=FALSE}
+#rainfall
+h_rain <- pred.rain$matRRfit %>% 
+  data.frame() %>%
+  rownames_to_column(var="var") %>%
+  mutate(var=as.numeric(var)) %>%
+  filter(var==18 | var==30) %>%
+  mutate(comparison = case_when(var==18 ~ "Mid (18mm) vs. low (0mm)",
+                                var==30 ~ "High (30mm) vs. low (0mm)"),
+         variable="Old age",
+         model = "Rainfall") %>%
+  pivot_longer(cols = lag0:lag20)
+
+h_rain_ci_lo <- pred.rain$matRRlow %>% 
+  data.frame() %>%
+  rownames_to_column(var="var") %>%
+  mutate(var=as.numeric(var)) %>%
+  filter(var==18 | var==30) %>%
+  pivot_longer(cols = lag0:lag20) %>%
+  rename(ci_lo=value)
+
+h_rain_ci_hi <- pred.rain$matRRhigh %>% 
+  data.frame() %>%
+  rownames_to_column(var="var") %>%
+  mutate(var=as.numeric(var)) %>%
+  filter(var==18 | var==30) %>%
+  pivot_longer(cols = lag0:lag20) %>%
+  rename(ci_hi=value)
+
+h1 <- left_join(h_rain, h_rain_ci_lo)
+h1 <- left_join(h1, h_rain_ci_hi)
+
+#temp
+h_temp <- pred.temp$matRRfit %>% 
+  data.frame() %>%
+  rownames_to_column(var="var") %>%
+  mutate(var=as.numeric(var)) %>%
+  filter(var==20 | var==30) %>%
+  mutate(comparison = case_when(var==20 ~ "Mid (20°C) vs. low (17°C)",
+                                var==30 ~ "High (30°C) vs. low (17°C)"),
+         variable="Old age",
+         model = "Temperature") %>%
+  pivot_longer(cols = lag0:lag20)
+
+h_temp_ci_lo <- pred.temp$matRRlow %>% 
+  data.frame() %>%
+  rownames_to_column(var="var") %>%
+  mutate(var=as.numeric(var)) %>%
+  filter(var==20 | var==30) %>%
+  pivot_longer(cols = lag0:lag20) %>%
+  rename(ci_lo=value)
+
+h_temp_ci_hi <- pred.temp$matRRhigh %>% 
+  data.frame() %>%
+  rownames_to_column(var="var") %>%
+  mutate(var=as.numeric(var)) %>%
+  filter(var==20 | var==30) %>%
+  pivot_longer(cols = lag0:lag20) %>%
+  rename(ci_hi=value)
+
+h2 <- left_join(h_temp, h_temp_ci_lo)
+h2 <- left_join(h2, h_temp_ci_hi)
+
+h <- bind_rows(h1, h2)
+
+h <- h %>%
+  mutate(lag = parse_number(name))
+
+h %>%
+  ggplot() +
+  geom_pointrange(aes(x=lag, y=value, ymin=ci_lo, ymax=ci_hi, group=comparison, colour=comparison),
+                  position=position_jitterdodge()) +
+  facet_grid(comparison~model)
+  
+
+```
+
+
+stratification by microbiologically-confirmed TB (Xpert/smear positive)
+reconstruct cross-basis functions for rainfall and temperature given the optimal DoF
+
+
+```{r, message=FALSE, comment=NA, warning=FALSE}
+
+d_q_micro0 <- subset(d_q_micro,smr_xpert_any==0)
+
+sort(d_q_micro0$prcp, decreasing=FALSE)
+lagk=logknots(20, fun="ns", df=3)
+vark=equalknots(d_q_micro0$prcp, fun="ns", df=3)
+cb.rain <- crossbasis(d_q_micro0$prcp, lag=20, argvar=list(knots=vark), arglag=list(knots=lagk))
+
+sort(d_q_micro0$temp, decreasing=FALSE)
+lagk=logknots(20, fun="ns", df=3)
+vark=equalknots(d_q_micro0$temp, fun="ns", df=3)
+cb.temp <- crossbasis(d_q_micro0$temp, lag=20, argvar=list(knots=vark), arglag=list(knots=lagk))
+
+#fit two models for rainfall and temperature seperately in generalised linear framework
+model.r <- glm(ncase ~ cb.rain + wk + year, family=quasipoisson(), na.action=na.exclude, d_q_micro0)
+model.t <- glm(ncase ~ cb.temp + wk + year, family=quasipoisson(), na.action=na.exclude, d_q_micro0)
+
+#validate rainfall model by minimising high partial/auto-correlation (outside blue dotted lines)
+pacf(residuals(model.r,type="deviance"),na.action=na.omit,main="Partial autocorrelation",xlim=c(0,20))
+
+#validate temperature model by minimising high partial/auto-correlation (outside blue dotted lines)
+pacf(residuals(model.t,type="deviance"),na.action=na.omit,main="Partial autocorrelation",xlim=c(0,20))
+
+#predict (nowcast) the effect on TB notification of rainfall/temperature
+pred.rain <- crosspred(cb.rain, model.r, cen=0, by=0.2)
+pred.temp <- crosspred(cb.temp, model.t, cen=17, by=0.2)
+
+#plot 3D, countour and curves for rainfall on TB notifications
+par(mgp=c(2.3,1,0),mai=c(0.9,0.9,0.3,0.2))
+plot(pred.rain, "contour", key.title=title("TBN"), plot.title=title("A", xlab ="Weekly mean rainfall (mm)", ylab = "Weekly lag", cex.lab=1, cex.axis=1))
+plot(pred.rain, "slices", type="p", pch=19, cex=1.3, var=18, col="purple", ci.level=0.5, ci="bars", ylab="Report ratio", xlab="Weekly lag", main="B")
+plot(pred.rain, "slices", type="p", pch=19, cex=1.3, var=30, col="purple", ci.level=0.5, ci="bars", ylab="Report ratio", xlab="Weekly lag", main="C")
+
+#plot 3D, countour and curves for temperature on TB notifications
+par(mgp=c(2.3,1,0),mai=c(0.9,0.9,0.3,0.2))
+plot(pred.temp, "contour", key.title=title("TBN"), plot.title=title("D", xlab ="Weekly mean temperature (°C)", ylab = "Weekly lag", cex.lab=1, cex.axis=1))
+plot(pred.temp, "slices", type="p", pch=19, cex=1.3, var=20, col="red2", ci.level=0.5, ci="bars", ylab="Report ratio", xlab="Weekly lag", main="E")
+plot(pred.temp, "slices", type="p", pch=19, cex=1.3, var=30, col="red2", ci.level=0.5, ci="bars", ylab="Report ratio", xlab="Weekly lag", main="F")
+
+
+
+```
+
+<br>
+
+Extract the data for combined plot
+
+```{r, message=FALSE, comment=NA, warning=FALSE}
+#rainfall
+i_rain <- pred.rain$matRRfit %>% 
+  data.frame() %>%
+  rownames_to_column(var="var") %>%
+  mutate(var=as.numeric(var)) %>%
+  filter(var==18 | var==30) %>%
+  mutate(comparison = case_when(var==18 ~ "Mid (18mm) vs. low (0mm)",
+                                var==30 ~ "High (30mm) vs. low (0mm)"),
+         variable="Smear/Xpert negative",
+         model = "Rainfall") %>%
+  pivot_longer(cols = lag0:lag20)
+
+i_rain_ci_lo <- pred.rain$matRRlow %>% 
+  data.frame() %>%
+  rownames_to_column(var="var") %>%
+  mutate(var=as.numeric(var)) %>%
+  filter(var==18 | var==30) %>%
+  pivot_longer(cols = lag0:lag20) %>%
+  rename(ci_lo=value)
+
+i_rain_ci_hi <- pred.rain$matRRhigh %>% 
+  data.frame() %>%
+  rownames_to_column(var="var") %>%
+  mutate(var=as.numeric(var)) %>%
+  filter(var==18 | var==30) %>%
+  pivot_longer(cols = lag0:lag20) %>%
+  rename(ci_hi=value)
+
+i1 <- left_join(i_rain, i_rain_ci_lo)
+i1 <- left_join(i1, i_rain_ci_hi)
+
+#temp
+i_temp <- pred.temp$matRRfit %>% 
+  data.frame() %>%
+  rownames_to_column(var="var") %>%
+  mutate(var=as.numeric(var)) %>%
+  filter(var==20 | var==30) %>%
+  mutate(comparison = case_when(var==20 ~ "Mid (20°C) vs. low (17°C)",
+                                var==30 ~ "High (30°C) vs. low (17°C)"),
+         variable="Smear/Xpert negative",
+         model = "Temperature") %>%
+  pivot_longer(cols = lag0:lag20)
+
+i_temp_ci_lo <- pred.temp$matRRlow %>% 
+  data.frame() %>%
+  rownames_to_column(var="var") %>%
+  mutate(var=as.numeric(var)) %>%
+  filter(var==20 | var==30) %>%
+  pivot_longer(cols = lag0:lag20) %>%
+  rename(ci_lo=value)
+
+i_temp_ci_hi <- pred.temp$matRRhigh %>% 
+  data.frame() %>%
+  rownames_to_column(var="var") %>%
+  mutate(var=as.numeric(var)) %>%
+  filter(var==20 | var==30) %>%
+  pivot_longer(cols = lag0:lag20) %>%
+  rename(ci_hi=value)
+
+i2 <- left_join(i_temp, i_temp_ci_lo)
+i2 <- left_join(i2, i_temp_ci_hi)
+
+i <- bind_rows(i1, i2)
+
+i <- i %>%
+  mutate(lag = parse_number(name))
+
+i %>%
+  ggplot() +
+  geom_pointrange(aes(x=lag, y=value, ymin=ci_lo, ymax=ci_hi, group=comparison, colour=comparison),
+                  position=position_jitterdodge()) +
+  facet_grid(comparison~model)
+  
+
+```
+
+<br>
+
+stratification by smear/xpert positive
+reconstruct cross-basis functions for rainfall and temperature given the optimal DoF
+
+```{r, message=FALSE, comment=NA, warning=FALSE}
+
+d_q_micro1 <- subset(d_q_micro,smr_xpert_any==1)
+
+sort(d_q_micro1$prcp, decreasing=FALSE)
+lagk=logknots(20, fun="ns", df=3)
+vark=equalknots(d_q_micro1$prcp, fun="ns", df=3)
+cb.rain <- crossbasis(d_q_micro1$prcp, lag=20, argvar=list(knots=vark), arglag=list(knots=lagk))
+
+sort(d_q_micro1$temp, decreasing=FALSE)
+lagk=logknots(20, fun="ns", df=3)
+vark=equalknots(d_q_micro1$temp, fun="ns", df=3)
+cb.temp <- crossbasis(d_q_micro1$temp, lag=20, argvar=list(knots=vark), arglag=list(knots=lagk))
+
+#fit two models for rainfall and temperature seperately in generalised linear framework
+model.r <- glm(ncase ~ cb.rain + wk + year, family=quasipoisson(), na.action=na.exclude, d_q_micro1)
+model.t <- glm(ncase ~ cb.temp + wk + year, family=quasipoisson(), na.action=na.exclude, d_q_micro1)
+
+#validate rainfall model by minimising high partial/auto-correlation (outside blue dotted lines)
+pacf(residuals(model.r,type="deviance"),na.action=na.omit,main="Partial autocorrelation",xlim=c(0,20))
+
+#validate temperature model by minimising high partial/auto-correlation (outside blue dotted lines)
+pacf(residuals(model.t,type="deviance"),na.action=na.omit,main="Partial autocorrelation",xlim=c(0,20))
+model.t <- update(model.t,.~.+lag(residuals(model.t,type="deviance"),9))
+
+#predict (nowcast) the effect on TB notification of rainfall/temperature
+pred.rain <- crosspred(cb.rain, model.r, cen=0, by=0.2)
+pred.temp <- crosspred(cb.temp, model.t, cen=17, by=0.2)
+
+#plot 3D, countour and curves for rainfall on TB notifications
+par(mgp=c(2.3,1,0),mai=c(0.9,0.9,0.3,0.2))
+plot(pred.rain, "contour", key.title=title("TBN"), plot.title=title("A", xlab ="Weekly mean rainfall (mm)", ylab = "Weekly lag", cex.lab=1, cex.axis=1))
+plot(pred.rain, "slices", type="p", pch=19, cex=1.3, var=18, col="purple", ci.level=0.5, ci="bars", ylab="Report ratio", xlab="Weekly lag", main="B")
+plot(pred.rain, "slices", type="p", pch=19, cex=1.3, var=30, col="purple", ci.level=0.5, ci="bars", ylab="Report ratio", xlab="Weekly lag", main="C")
+
+#plot 3D, countour and curves for temperature on TB notifications
+par(mgp=c(2.3,1,0),mai=c(0.9,0.9,0.3,0.2))
+plot(pred.temp, "contour", key.title=title("TBN"), plot.title=title("D", xlab ="Weekly mean temperature (°C)", ylab = "Weekly lag", cex.lab=1, cex.axis=1))
+plot(pred.temp, "slices", type="p", pch=19, cex=1.3, var=20, col="red2", ci.level=0.5, ci="bars", ylab="Report ratio", xlab="Weekly lag", main="E")
+plot(pred.temp, "slices", type="p", pch=19, cex=1.3, var=30, col="red2", ci.level=0.5, ci="bars", ylab="Report ratio", xlab="Weekly lag", main="F")
+
+
+```
+
+<br>
+
+Extract the data for combined plot
+
+```{r, message=FALSE, comment=NA, warning=FALSE}
+#rainfall
+j_rain <- pred.rain$matRRfit %>% 
+  data.frame() %>%
+  rownames_to_column(var="var") %>%
+  mutate(var=as.numeric(var)) %>%
+  filter(var==18 | var==30) %>%
+  mutate(comparison = case_when(var==18 ~ "Mid (18mm) vs. low (0mm)",
+                                var==30 ~ "High (30mm) vs. low (0mm)"),
+         variable="Smear/Xpert positive",
+         model = "Rainfall") %>%
+  pivot_longer(cols = lag0:lag20)
+
+j_rain_ci_lo <- pred.rain$matRRlow %>% 
+  data.frame() %>%
+  rownames_to_column(var="var") %>%
+  mutate(var=as.numeric(var)) %>%
+  filter(var==18 | var==30) %>%
+  pivot_longer(cols = lag0:lag20) %>%
+  rename(ci_lo=value)
+
+j_rain_ci_hi <- pred.rain$matRRhigh %>% 
+  data.frame() %>%
+  rownames_to_column(var="var") %>%
+  mutate(var=as.numeric(var)) %>%
+  filter(var==18 | var==30) %>%
+  pivot_longer(cols = lag0:lag20) %>%
+  rename(ci_hi=value)
+
+j1 <- left_join(j_rain, j_rain_ci_lo)
+j1 <- left_join(j1, j_rain_ci_hi)
+
+#temp
+j_temp <- pred.temp$matRRfit %>% 
+  data.frame() %>%
+  rownames_to_column(var="var") %>%
+  mutate(var=as.numeric(var)) %>%
+  filter(var==20 | var==30) %>%
+  mutate(comparison = case_when(var==20 ~ "Mid (20°C) vs. low (17°C)",
+                                var==30 ~ "High (30°C) vs. low (17°C)"),
+         variable="Smear/Xpert positive",
+         model = "Temperature") %>%
+  pivot_longer(cols = lag0:lag20)
+
+j_temp_ci_lo <- pred.temp$matRRlow %>% 
+  data.frame() %>%
+  rownames_to_column(var="var") %>%
+  mutate(var=as.numeric(var)) %>%
+  filter(var==20 | var==30) %>%
+  pivot_longer(cols = lag0:lag20) %>%
+  rename(ci_lo=value)
+
+j_temp_ci_hi <- pred.temp$matRRhigh %>% 
+  data.frame() %>%
+  rownames_to_column(var="var") %>%
+  mutate(var=as.numeric(var)) %>%
+  filter(var==20 | var==30) %>%
+  pivot_longer(cols = lag0:lag20) %>%
+  rename(ci_hi=value)
+
+j2 <- left_join(j_temp, j_temp_ci_lo)
+j2 <- left_join(j2, j_temp_ci_hi)
+
+j <- bind_rows(j1, j2)
+
+j <- j %>%
+  mutate(lag = parse_number(name))
+
+j %>%
+  ggplot() +
+  geom_pointrange(aes(x=lag, y=value, ymin=ci_lo, ymax=ci_hi, group=comparison, colour=comparison),
+                  position=position_jitterdodge()) +
+  facet_grid(comparison~model)
+  
+
+```
+
+<br>
+
+## 12. Figure 3
+
+Bring all the estimates together in a single plot
+
+
+```{r, message=FALSE, comment=NA, warning=FALSE}
+
+fig2 <- bind_rows(a,b,c,d,e,f,g,h,i,j)
+
+fig2 <- fig2 %>%
+  mutate(variable = fct_relevel(variable,
+            "Overall", "Male", "Female", "HIV-positive",
+            "HIV-negative", "Young age", "Middle age", "Old age", 
+            "Smear/Xpert positive", "Smear/Xpert negative"))
+
+fig2 %>%
+  ggplot() +
+  geom_hline(aes(yintercept=1)) +
+  geom_pointrange(aes(x=lag, y=value, ymin=ci_lo, ymax=ci_hi, group=comparison, colour=comparison), 
+                  pch=16, size=0.3) +
+  facet_grid(variable~model + comparison) +
+  theme_bw() +
+  #coord_trans(y = "log10") +
+  scale_fill_manual(values = c("#E31A1C",  "#1F78B4", "#A6CEE3", "#FB9A99"))+
+  scale_colour_manual(values = c("#E31A1C", "#1F78B4", "#A6CEE3", "#FB9A99")) +
+  labs(y="Report ratio (95% CI)",
+       x="Lag (weeks)") +
+  theme(legend.position = "none",
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        strip.background = element_rect(colour = "black", fill = "white"),
+        strip.text = element_text(size=8, family = "Open Sans Condensed Light", color = "black"))
+
+ggsave(here("figures/figure3a.png"), height=10, dpi=600)
+
+fig2 %>%
+  ggplot() +
+  geom_hline(aes(yintercept=1), colour="grey", linetype="dashed") +
+  geom_ribbon(aes(x=lag, ymin=ci_lo, ymax=ci_hi, fill=comparison), alpha=0.6) +
+  geom_line(aes(x=lag, y=value, colour=comparison)) +
+  facet_grid(variable~model + comparison) +
+  theme_bw() +
+  coord_trans(y = "log10") +
+  scale_fill_manual(values = c("#E31A1C",  "#1F78B4", "#A6CEE3", "#FB9A99"))+
+  scale_colour_manual(values = c("#E31A1C", "#1F78B4", "#A6CEE3", "#FB9A99")) +
+  labs(y="Report ratio (95% CI)",
+       x="Lag (weeks)")  +
+  theme(legend.position = "none",
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        strip.background = element_rect(colour = "black", fill = "white"),
+        strip.text = element_text(size=8, family = "Open Sans Condensed Light", color = "black"))
+
+ggsave(here("figures/figure3b.png"), height=10, dpi=600)
+
+
+```
+
+
+
+<br>
+
+## 13. Reproducibility
+
+This reproduction of the analysis was run by: 
+
+```{r sysinfo, echo=FALSE, message=FALSE, comment=NA, warning=FALSE}
+
+sysinfo <- Sys.info()
+
+sysinfo <- data.frame(keyName=names(sysinfo), value=sysinfo, row.names=NULL)
+
+sysinfo %>% kable()
+```
+
+Analysis was run at **`r Sys.time()`**, and using the following Session Info:
+
+```{r sessioninfo, echo=FALSE, results='markdown', message=FALSE, comment=NA, warning=FALSE}
+sessionInfo()
+```
