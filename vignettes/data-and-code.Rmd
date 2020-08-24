@@ -1,8 +1,8 @@
 ---
-title: "Data and code"
+title: "data-and-code"
 output: rmarkdown::html_vignette
 vignette: >
-  %\VignetteIndexEntry{data and code}
+  %\VignetteIndexEntry{data-and-code}
   %\VignetteEngine{knitr::rmarkdown}
   %\VignetteEncoding{UTF-8}
 ---
