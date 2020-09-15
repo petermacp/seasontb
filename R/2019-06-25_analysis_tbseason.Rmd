@@ -216,6 +216,16 @@ CNR <- d %>%
 
 CNR
 
+d %>%
+  mutate(year = year(y_w)) %>%
+  mutate(month = month(y_w, label=TRUE)) %>%
+  group_by(year) %>%
+  slice_max(i, n=5) %>%
+  select(year, month, i) %>%
+  group_by(month) %>%
+  add_count() %>%
+  arrange(desc(n))
+
 
 ```
 
@@ -1012,14 +1022,14 @@ pred.temp <- crosspred(cb.temp, model.t, cen=17, by=0.2)
 #plot 3D, countour and curves for rainfall on TB notifications
 par(mgp=c(2.3,1,0),mai=c(0.9,0.9,0.3,0.2))
 plot(pred.rain, "contour", key.title=title("TBN"), plot.title=title("A", xlab ="Weekly mean rainfall (mm)", ylab = "Weekly lag", cex.lab=1, cex.axis=1))
-plot(pred.rain, "slices", type="p", pch=19, cex=1.3, var=18, col="purple", ci.level=0.5, ci="bars", ylab="Report ratio", xlab="Weekly lag", main="B")
-plot(pred.rain, "slices", type="p", pch=19, cex=1.3, var=30, col="purple", ci.level=0.5, ci="bars", ylab="Report ratio", xlab="Weekly lag", main="C")
+plot(pred.rain, "slices", type="p", pch=19, cex=1.3, var=18, col="purple", ci.level=0.95, ci="bars", ylab="Report ratio", xlab="Weekly lag", main="B")
+plot(pred.rain, "slices", type="p", pch=19, cex=1.3, var=30, col="purple", ci.level=0.95, ci="bars", ylab="Report ratio", xlab="Weekly lag", main="C")
 
 #plot 3D, countour and curves for temperature on TB notifications
 par(mgp=c(2.3,1,0),mai=c(0.9,0.9,0.3,0.2))
 plot(pred.temp, "contour", key.title=title("TBN"), plot.title=title("D", xlab ="Weekly mean temperature (°C)", ylab = "Weekly lag", cex.lab=1, cex.axis=1))
-plot(pred.temp, "slices", type="p", pch=19, cex=1.3, var=20, col="red2", ci.level=0.5, ci="bars", ylab="Report ratio", xlab="Weekly lag", main="E")
-plot(pred.temp, "slices", type="p", pch=19, cex=1.3, var=30, col="red2", ci.level=0.5, ci="bars", ylab="Report ratio", xlab="Weekly lag", main="F")
+plot(pred.temp, "slices", type="p", pch=19, cex=1.3, var=20, col="red2", ci.level=0.95, ci="bars", ylab="Report ratio", xlab="Weekly lag", main="E")
+plot(pred.temp, "slices", type="p", pch=19, cex=1.3, var=30, col="red2", ci.level=0.95, ci="bars", ylab="Report ratio", xlab="Weekly lag", main="F")
 
 
 
@@ -1230,14 +1240,14 @@ pred.temp <- crosspred(cb.temp, model.t, cen=17, by=0.2)
 #plot 3D, countour and curves for rainfall on TB notifications
 par(mgp=c(2.3,1,0),mai=c(0.9,0.9,0.3,0.2))
 plot(pred.rain, "contour", key.title=title("TBN"), plot.title=title("A", xlab ="Weekly mean rainfall (mm)", ylab = "Weekly lag", cex.lab=1, cex.axis=1))
-plot(pred.rain, "slices", type="p", pch=19, cex=1.3, var=18, col="purple", ci.level=0.5, ci="bars", ylab="Report ratio", xlab="Weekly lag", main="B")
-plot(pred.rain, "slices", type="p", pch=19, cex=1.3, var=30, col="purple", ci.level=0.5, ci="bars", ylab="Report ratio", xlab="Weekly lag", main="C")
+plot(pred.rain, "slices", type="p", pch=19, cex=1.3, var=18, col="purple", ci.level=0.95, ci="bars", ylab="Report ratio", xlab="Weekly lag", main="B")
+plot(pred.rain, "slices", type="p", pch=19, cex=1.3, var=30, col="purple", ci.level=0.95, ci="bars", ylab="Report ratio", xlab="Weekly lag", main="C")
 
 #plot 3D, countour and curves for temperature on TB notifications
 par(mgp=c(2.3,1,0),mai=c(0.9,0.9,0.3,0.2))
 plot(pred.temp, "contour", key.title=title("TBN"), plot.title=title("D", xlab ="Weekly mean temperature (°C)", ylab = "Weekly lag", cex.lab=1, cex.axis=1))
-plot(pred.temp, "slices", type="p", pch=19, cex=1.3, var=20, col="red2", ci.level=0.5, ci="bars", ylab="Report ratio", xlab="Weekly lag", main="E")
-plot(pred.temp, "slices", type="p", pch=19, cex=1.3, var=30, col="red2", ci.level=0.5, ci="bars", ylab="Report ratio", xlab="Weekly lag", main="F")
+plot(pred.temp, "slices", type="p", pch=19, cex=1.3, var=20, col="red2", ci.level=0.95, ci="bars", ylab="Report ratio", xlab="Weekly lag", main="E")
+plot(pred.temp, "slices", type="p", pch=19, cex=1.3, var=30, col="red2", ci.level=0.95, ci="bars", ylab="Report ratio", xlab="Weekly lag", main="F")
 
 
 
@@ -1362,14 +1372,14 @@ pred.temp <- crosspred(cb.temp, model.t, cen=17, by=0.2)
 #plot 3D, countour and curves for rainfall on TB notifications
 par(mgp=c(2.3,1,0),mai=c(0.9,0.9,0.3,0.2))
 plot(pred.rain, "contour", key.title=title("TBN"), plot.title=title("A", xlab ="Weekly mean rainfall (mm)", ylab = "Weekly lag", cex.lab=1, cex.axis=1))
-plot(pred.rain, "slices", type="p", pch=19, cex=1.3, var=18, col="purple", ci.level=0.5, ci="bars", ylab="Report ratio", xlab="Weekly lag", main="B")
-plot(pred.rain, "slices", type="p", pch=19, cex=1.3, var=30, col="purple", ci.level=0.5, ci="bars", ylab="Report ratio", xlab="Weekly lag", main="C")
+plot(pred.rain, "slices", type="p", pch=19, cex=1.3, var=18, col="purple", ci.level=0.95, ci="bars", ylab="Report ratio", xlab="Weekly lag", main="B")
+plot(pred.rain, "slices", type="p", pch=19, cex=1.3, var=30, col="purple", ci.level=0.95, ci="bars", ylab="Report ratio", xlab="Weekly lag", main="C")
 
 #plot 3D, countour and curves for temperature on TB notifications
 par(mgp=c(2.3,1,0),mai=c(0.9,0.9,0.3,0.2))
 plot(pred.temp, "contour", key.title=title("TBN"), plot.title=title("D", xlab ="Weekly mean temperature (°C)", ylab = "Weekly lag", cex.lab=1, cex.axis=1))
-plot(pred.temp, "slices", type="p", pch=19, cex=1.3, var=20, col="red2", ci.level=0.5, ci="bars", ylab="Report ratio", xlab="Weekly lag", main="E")
-plot(pred.temp, "slices", type="p", pch=19, cex=1.3, var=30, col="red2", ci.level=0.5, ci="bars", ylab="Report ratio", xlab="Weekly lag", main="F")
+plot(pred.temp, "slices", type="p", pch=19, cex=1.3, var=20, col="red2", ci.level=0.95, ci="bars", ylab="Report ratio", xlab="Weekly lag", main="E")
+plot(pred.temp, "slices", type="p", pch=19, cex=1.3, var=30, col="red2", ci.level=0.95, ci="bars", ylab="Report ratio", xlab="Weekly lag", main="F")
 
 
 ```
@@ -1494,14 +1504,14 @@ pred.temp <- crosspred(cb.temp, model.t, cen=17, by=0.2)
 #plot 3D, countour and curves for rainfall on TB notifications
 par(mgp=c(2.3,1,0),mai=c(0.9,0.9,0.3,0.2))
 plot(pred.rain, "contour", key.title=title("TBN"), plot.title=title("A", xlab ="Weekly mean rainfall (mm)", ylab = "Weekly lag", cex.lab=1, cex.axis=1))
-plot(pred.rain, "slices", type="p", pch=19, cex=1.3, var=18, col="purple", ci.level=0.5, ci="bars", ylab="Report ratio", xlab="Weekly lag", main="B")
-plot(pred.rain, "slices", type="p", pch=19, cex=1.3, var=30, col="purple", ci.level=0.5, ci="bars", ylab="Report ratio", xlab="Weekly lag", main="C")
+plot(pred.rain, "slices", type="p", pch=19, cex=1.3, var=18, col="purple", ci.level=0.95, ci="bars", ylab="Report ratio", xlab="Weekly lag", main="B")
+plot(pred.rain, "slices", type="p", pch=19, cex=1.3, var=30, col="purple", ci.level=0.95, ci="bars", ylab="Report ratio", xlab="Weekly lag", main="C")
 
 #plot 3D, countour and curves for temperature on TB notifications
 par(mgp=c(2.3,1,0),mai=c(0.9,0.9,0.3,0.2))
 plot(pred.temp, "contour", key.title=title("TBN"), plot.title=title("D", xlab ="Weekly mean temperature (°C)", ylab = "Weekly lag", cex.lab=1, cex.axis=1))
-plot(pred.temp, "slices", type="p", pch=19, cex=1.3, var=20, col="red2", ci.level=0.5, ci="bars", ylab="Report ratio", xlab="Weekly lag", main="E")
-plot(pred.temp, "slices", type="p", pch=19, cex=1.3, var=30, col="red2", ci.level=0.5, ci="bars", ylab="Report ratio", xlab="Weekly lag", main="F")
+plot(pred.temp, "slices", type="p", pch=19, cex=1.3, var=20, col="red2", ci.level=0.95, ci="bars", ylab="Report ratio", xlab="Weekly lag", main="E")
+plot(pred.temp, "slices", type="p", pch=19, cex=1.3, var=30, col="red2", ci.level=0.95, ci="bars", ylab="Report ratio", xlab="Weekly lag", main="F")
 
 
 
@@ -1627,14 +1637,14 @@ pred.temp <- crosspred(cb.temp, model.t, cen=17, by=0.2)
 #plot 3D, countour and curves for rainfall on TB notifications
 par(mgp=c(2.3,1,0),mai=c(0.9,0.9,0.3,0.2))
 plot(pred.rain, "contour", key.title=title("TBN"), plot.title=title("A", xlab ="Weekly mean rainfall (mm)", ylab = "Weekly lag", cex.lab=1, cex.axis=1))
-plot(pred.rain, "slices", type="p", pch=19, cex=1.3, var=18, col="purple", ci.level=0.5, ci="bars", ylab="Report ratio", xlab="Weekly lag", main="B")
-plot(pred.rain, "slices", type="p", pch=19, cex=1.3, var=30, col="purple", ci.level=0.5, ci="bars", ylab="Report ratio", xlab="Weekly lag", main="C")
+plot(pred.rain, "slices", type="p", pch=19, cex=1.3, var=18, col="purple", ci.level=0.95, ci="bars", ylab="Report ratio", xlab="Weekly lag", main="B")
+plot(pred.rain, "slices", type="p", pch=19, cex=1.3, var=30, col="purple", ci.level=0.95, ci="bars", ylab="Report ratio", xlab="Weekly lag", main="C")
 
 #plot 3D, countour and curves for temperature on TB notifications
 par(mgp=c(2.3,1,0),mai=c(0.9,0.9,0.3,0.2))
 plot(pred.temp, "contour", key.title=title("TBN"), plot.title=title("D", xlab ="Weekly mean temperature (°C)", ylab = "Weekly lag", cex.lab=1, cex.axis=1))
-plot(pred.temp, "slices", type="p", pch=19, cex=1.3, var=20, col="red2", ci.level=0.5, ci="bars", ylab="Report ratio", xlab="Weekly lag", main="E")
-plot(pred.temp, "slices", type="p", pch=19, cex=1.3, var=30, col="red2", ci.level=0.5, ci="bars", ylab="Report ratio", xlab="Weekly lag", main="F")
+plot(pred.temp, "slices", type="p", pch=19, cex=1.3, var=20, col="red2", ci.level=0.95, ci="bars", ylab="Report ratio", xlab="Weekly lag", main="E")
+plot(pred.temp, "slices", type="p", pch=19, cex=1.3, var=30, col="red2", ci.level=0.95, ci="bars", ylab="Report ratio", xlab="Weekly lag", main="F")
 
 ```
 
@@ -1762,14 +1772,14 @@ pred.temp <- crosspred(cb.temp, model.t, cen=17, by=0.2)
 #plot 3D, countour and curves for rainfall on TB notifications
 par(mgp=c(2.3,1,0),mai=c(0.9,0.9,0.3,0.2))
 plot(pred.rain, "contour", key.title=title("TBN"), plot.title=title("A", xlab ="Weekly mean rainfall (mm)", ylab = "Weekly lag", cex.lab=1, cex.axis=1))
-plot(pred.rain, "slices", type="p", pch=19, cex=1.3, var=18, col="purple", ci.level=0.5, ci="bars", ylab="Report ratio", xlab="Weekly lag", main="B")
-plot(pred.rain, "slices", type="p", pch=19, cex=1.3, var=30, col="purple", ci.level=0.5, ci="bars", ylab="Report ratio", xlab="Weekly lag", main="C")
+plot(pred.rain, "slices", type="p", pch=19, cex=1.3, var=18, col="purple", ci.level=0.95, ci="bars", ylab="Report ratio", xlab="Weekly lag", main="B")
+plot(pred.rain, "slices", type="p", pch=19, cex=1.3, var=30, col="purple", ci.level=0.95, ci="bars", ylab="Report ratio", xlab="Weekly lag", main="C")
 
 #plot 3D, countour and curves for temperature on TB notifications
 par(mgp=c(2.3,1,0),mai=c(0.9,0.9,0.3,0.2))
 plot(pred.temp, "contour", key.title=title("TBN"), plot.title=title("D", xlab ="Weekly mean temperature (°C)", ylab = "Weekly lag", cex.lab=1, cex.axis=1))
-plot(pred.temp, "slices", type="p", pch=19, cex=1.3, var=20, col="red2", ci.level=0.5, ci="bars", ylab="Report ratio", xlab="Weekly lag", main="E")
-plot(pred.temp, "slices", type="p", pch=19, cex=1.3, var=30, col="red2", ci.level=0.5, ci="bars", ylab="Report ratio", xlab="Weekly lag", main="F")
+plot(pred.temp, "slices", type="p", pch=19, cex=1.3, var=20, col="red2", ci.level=0.95, ci="bars", ylab="Report ratio", xlab="Weekly lag", main="E")
+plot(pred.temp, "slices", type="p", pch=19, cex=1.3, var=30, col="red2", ci.level=0.95, ci="bars", ylab="Report ratio", xlab="Weekly lag", main="F")
 
 ```
 
@@ -1890,14 +1900,14 @@ pred.temp <- crosspred(cb.temp, model.t, cen=17, by=0.2)
 #plot 3D, countour and curves for rainfall on TB notifications
 par(mgp=c(2.3,1,0),mai=c(0.9,0.9,0.3,0.2))
 plot(pred.rain, "contour", key.title=title("TBN"), plot.title=title("A", xlab ="Weekly mean rainfall (mm)", ylab = "Weekly lag", cex.lab=1, cex.axis=1))
-plot(pred.rain, "slices", type="p", pch=19, cex=1.3, var=18, col="purple", ci.level=0.5, ci="bars", ylab="Report ratio", xlab="Weekly lag", main="B")
-plot(pred.rain, "slices", type="p", pch=19, cex=1.3, var=30, col="purple", ci.level=0.5, ci="bars", ylab="Report ratio", xlab="Weekly lag", main="C")
+plot(pred.rain, "slices", type="p", pch=19, cex=1.3, var=18, col="purple", ci.level=0.95, ci="bars", ylab="Report ratio", xlab="Weekly lag", main="B")
+plot(pred.rain, "slices", type="p", pch=19, cex=1.3, var=30, col="purple", ci.level=0.95, ci="bars", ylab="Report ratio", xlab="Weekly lag", main="C")
 
 #plot 3D, countour and curves for temperature on TB notifications
 par(mgp=c(2.3,1,0),mai=c(0.9,0.9,0.3,0.2))
 plot(pred.temp, "contour", key.title=title("TBN"), plot.title=title("D", xlab ="Weekly mean temperature (°C)", ylab = "Weekly lag", cex.lab=1, cex.axis=1))
-plot(pred.temp, "slices", type="p", pch=19, cex=1.3, var=20, col="red2", ci.level=0.5, ci="bars", ylab="Report ratio", xlab="Weekly lag", main="E")
-plot(pred.temp, "slices", type="p", pch=19, cex=1.3, var=30, col="red2", ci.level=0.5, ci="bars", ylab="Report ratio", xlab="Weekly lag", main="F")
+plot(pred.temp, "slices", type="p", pch=19, cex=1.3, var=20, col="red2", ci.level=0.95, ci="bars", ylab="Report ratio", xlab="Weekly lag", main="E")
+plot(pred.temp, "slices", type="p", pch=19, cex=1.3, var=30, col="red2", ci.level=0.95, ci="bars", ylab="Report ratio", xlab="Weekly lag", main="F")
 
 ```
 
@@ -2014,20 +2024,20 @@ pacf(residuals(model.t,type="deviance"),na.action=na.omit,main="Partial autocorr
 model.t <- update(model.t,.~.+lag(residuals(model.t,type="deviance"),14))
 
 #predict (nowcast) the effect on TB notification of rainfall/temperature
-pred.rain <- crosspred(cb.rain, model.r, cen=0, by=0.2, ci.level = 0.50)
+pred.rain <- crosspred(cb.rain, model.r, cen=0, by=0.2, ci.level = 0.95)
 pred.temp <- crosspred(cb.temp, model.t, cen=17, by=0.2)
 
 #plot 3D, countour and curves for rainfall on TB notifications
 par(mgp=c(2.3,1,0),mai=c(0.9,0.9,0.3,0.2))
 plot(pred.rain, "contour", key.title=title("TBN"), plot.title=title("A", xlab ="Weekly mean rainfall (mm)", ylab = "Weekly lag", cex.lab=1, cex.axis=1))
-plot(pred.rain, "slices", type="p", pch=19, cex=1.3, var=18, col="purple", ci.level=0.5, ci="bars", ylab="Report ratio", xlab="Weekly lag", main="B")
-plot(pred.rain, "slices", type="p", pch=19, cex=1.3, var=30, col="purple", ci.level=0.5, ci="bars", ylab="Report ratio", xlab="Weekly lag", main="C")
+plot(pred.rain, "slices", type="p", pch=19, cex=1.3, var=18, col="purple", ci.level=0.95, ci="bars", ylab="Report ratio", xlab="Weekly lag", main="B")
+plot(pred.rain, "slices", type="p", pch=19, cex=1.3, var=30, col="purple", ci.level=0.95, ci="bars", ylab="Report ratio", xlab="Weekly lag", main="C")
 
 #plot 3D, countour and curves for temperature on TB notifications
 par(mgp=c(2.3,1,0),mai=c(0.9,0.9,0.3,0.2))
 plot(pred.temp, "contour", key.title=title("TBN"), plot.title=title("D", xlab ="Weekly mean temperature (°C)", ylab = "Weekly lag", cex.lab=1, cex.axis=1))
-plot(pred.temp, "slices", type="p", pch=19, cex=1.3, var=20, col="red2", ci.level=0.5, ci="bars", ylab="Report ratio", xlab="Weekly lag", main="E")
-plot(pred.temp, "slices", type="p", pch=19, cex=1.3, var=30, col="red2", ci.level=0.5, ci="bars", ylab="Report ratio", xlab="Weekly lag", main="F")
+plot(pred.temp, "slices", type="p", pch=19, cex=1.3, var=20, col="red2", ci.level=0.95, ci="bars", ylab="Report ratio", xlab="Weekly lag", main="E")
+plot(pred.temp, "slices", type="p", pch=19, cex=1.3, var=30, col="red2", ci.level=0.95, ci="bars", ylab="Report ratio", xlab="Weekly lag", main="F")
 
 
 
@@ -2150,14 +2160,14 @@ pred.temp <- crosspred(cb.temp, model.t, cen=17, by=0.2)
 #plot 3D, countour and curves for rainfall on TB notifications
 par(mgp=c(2.3,1,0),mai=c(0.9,0.9,0.3,0.2))
 plot(pred.rain, "contour", key.title=title("TBN"), plot.title=title("A", xlab ="Weekly mean rainfall (mm)", ylab = "Weekly lag", cex.lab=1, cex.axis=1))
-plot(pred.rain, "slices", type="p", pch=19, cex=1.3, var=18, col="purple", ci.level=0.5, ci="bars", ylab="Report ratio", xlab="Weekly lag", main="B")
-plot(pred.rain, "slices", type="p", pch=19, cex=1.3, var=30, col="purple", ci.level=0.5, ci="bars", ylab="Report ratio", xlab="Weekly lag", main="C")
+plot(pred.rain, "slices", type="p", pch=19, cex=1.3, var=18, col="purple", ci.level=0.95, ci="bars", ylab="Report ratio", xlab="Weekly lag", main="B")
+plot(pred.rain, "slices", type="p", pch=19, cex=1.3, var=30, col="purple", ci.level=0.95, ci="bars", ylab="Report ratio", xlab="Weekly lag", main="C")
 
 #plot 3D, countour and curves for temperature on TB notifications
 par(mgp=c(2.3,1,0),mai=c(0.9,0.9,0.3,0.2))
 plot(pred.temp, "contour", key.title=title("TBN"), plot.title=title("D", xlab ="Weekly mean temperature (°C)", ylab = "Weekly lag", cex.lab=1, cex.axis=1))
-plot(pred.temp, "slices", type="p", pch=19, cex=1.3, var=20, col="red2", ci.level=0.5, ci="bars", ylab="Report ratio", xlab="Weekly lag", main="E")
-plot(pred.temp, "slices", type="p", pch=19, cex=1.3, var=30, col="red2", ci.level=0.5, ci="bars", ylab="Report ratio", xlab="Weekly lag", main="F")
+plot(pred.temp, "slices", type="p", pch=19, cex=1.3, var=20, col="red2", ci.level=0.95, ci="bars", ylab="Report ratio", xlab="Weekly lag", main="E")
+plot(pred.temp, "slices", type="p", pch=19, cex=1.3, var=30, col="red2", ci.level=0.95, ci="bars", ylab="Report ratio", xlab="Weekly lag", main="F")
 
 
 
@@ -2281,14 +2291,14 @@ pred.temp <- crosspred(cb.temp, model.t, cen=17, by=0.2)
 #plot 3D, countour and curves for rainfall on TB notifications
 par(mgp=c(2.3,1,0),mai=c(0.9,0.9,0.3,0.2))
 plot(pred.rain, "contour", key.title=title("TBN"), plot.title=title("A", xlab ="Weekly mean rainfall (mm)", ylab = "Weekly lag", cex.lab=1, cex.axis=1))
-plot(pred.rain, "slices", type="p", pch=19, cex=1.3, var=18, col="purple", ci.level=0.5, ci="bars", ylab="Report ratio", xlab="Weekly lag", main="B")
-plot(pred.rain, "slices", type="p", pch=19, cex=1.3, var=30, col="purple", ci.level=0.5, ci="bars", ylab="Report ratio", xlab="Weekly lag", main="C")
+plot(pred.rain, "slices", type="p", pch=19, cex=1.3, var=18, col="purple", ci.level=0.95, ci="bars", ylab="Report ratio", xlab="Weekly lag", main="B")
+plot(pred.rain, "slices", type="p", pch=19, cex=1.3, var=30, col="purple", ci.level=0.95, ci="bars", ylab="Report ratio", xlab="Weekly lag", main="C")
 
 #plot 3D, countour and curves for temperature on TB notifications
 par(mgp=c(2.3,1,0),mai=c(0.9,0.9,0.3,0.2))
 plot(pred.temp, "contour", key.title=title("TBN"), plot.title=title("D", xlab ="Weekly mean temperature (°C)", ylab = "Weekly lag", cex.lab=1, cex.axis=1))
-plot(pred.temp, "slices", type="p", pch=19, cex=1.3, var=20, col="red2", ci.level=0.5, ci="bars", ylab="Report ratio", xlab="Weekly lag", main="E")
-plot(pred.temp, "slices", type="p", pch=19, cex=1.3, var=30, col="red2", ci.level=0.5, ci="bars", ylab="Report ratio", xlab="Weekly lag", main="F")
+plot(pred.temp, "slices", type="p", pch=19, cex=1.3, var=20, col="red2", ci.level=0.95, ci="bars", ylab="Report ratio", xlab="Weekly lag", main="E")
+plot(pred.temp, "slices", type="p", pch=19, cex=1.3, var=30, col="red2", ci.level=0.95, ci="bars", ylab="Report ratio", xlab="Weekly lag", main="F")
 
 
 ```
@@ -2401,7 +2411,7 @@ fig2 %>%
   #coord_trans(y = "log10") +
   scale_fill_manual(values = c("#E31A1C",  "#1F78B4", "#A6CEE3", "#FB9A99"))+
   scale_colour_manual(values = c("#E31A1C", "#1F78B4", "#A6CEE3", "#FB9A99")) +
-  labs(y="Report ratio (95% CI)",
+  labs(y="TB notification ratio (95% CI)",
        x="Lag (weeks)") +
   theme(legend.position = "none",
         panel.grid.major = element_blank(),
@@ -2427,7 +2437,7 @@ fig2 %>%
         panel.grid.major = element_blank(),
         panel.grid.minor = element_blank(),
         strip.background = element_rect(colour = "black", fill = "white"),
-        strip.text = element_text(size=8, family = "Open Sans Condensed Light", color = "black"))
+        strip.text = element_text(size=8, family = "Arial", color = "black"))
 
 ggsave(here("figures/figure3b.png"), height=10, dpi=600)
 
